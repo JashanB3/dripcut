@@ -74,7 +74,7 @@ class PluginsPage(Page):
                     "Run tool", elem_classes=["dc-btn", "dc-btn-primary"],
                     elem_id="dc-plugins-run", variant="primary",
                 )
-                tool_outputs = gr.Files(label="Tool output", visible=False)
+                tool_outputs = gr.Files(label="Tool output", file_count="multiple", visible=False)
 
             with gr.Accordion("Where plugins come from", open=False):
                 gr.HTML(self._sources())

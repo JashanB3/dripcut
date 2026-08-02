@@ -56,6 +56,17 @@ class Quality(StrEnum):
         }[self]
 
     @property
+    def nvenc_cq(self) -> int:
+        """NVENC constant-quality value; lower is higher quality."""
+        return {
+            Quality.LOSSLESS: 0,
+            Quality.HIGH: 18,
+            Quality.BALANCED: 23,
+            Quality.SMALL: 28,
+            Quality.TINY: 33,
+        }[self]
+
+    @property
     def label(self) -> str:
         """Radio label."""
         return {
@@ -158,6 +169,8 @@ class EncodeSettings:
             args += ["-c:v", video_encoder]
             if video_encoder.endswith("videotoolbox"):
                 args += ["-q:v", str(self.quality.hw_quality), "-allow_sw", "1"]
+            elif video_encoder.endswith("_nvenc"):
+                args += ["-cq:v", str(self.quality.nvenc_cq), "-preset", "p4"]
             elif video_encoder in {"libx264", "libx265"}:
                 args += ["-crf", str(self.resolved_crf()), "-preset", self.resolved_preset()]
                 if self.resolved_crf() == 0 and video_encoder == "libx264":

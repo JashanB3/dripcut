@@ -187,10 +187,10 @@ class Doctor:
             )
 
     def _acceleration_checks(self) -> Iterator[Check]:
-        """Hardware encoder availability (VideoToolbox on Apple Silicon)."""
+        """Hardware encoder availability for macOS and GPU workers."""
         if not shutil.which(self.settings.ffmpeg_path):
             yield Check(
-                "VideoToolbox",
+                "Hardware encoders",
                 Status.SKIP,
                 "cannot test without FFmpeg",
                 group="Media tools",
@@ -199,22 +199,24 @@ class Doctor:
 
         encoders = _list_encoders(self.settings.ffmpeg_path)
         is_macos = platform.system() == "Darwin"
-        hw = sorted(name for name in encoders if "videotoolbox" in name)
+        videotoolbox = sorted(name for name in encoders if "videotoolbox" in name)
+        nvenc = sorted(name for name in encoders if name.endswith("_nvenc"))
 
-        if hw:
+        if videotoolbox or nvenc:
             enabled = self.settings.video.hardware_accel
+            available = [*videotoolbox, *nvenc]
             yield Check(
-                "VideoToolbox",
+                "Hardware encoders",
                 Status.OK if enabled else Status.WARN,
-                f"{', '.join(hw)}" + ("" if enabled else " available but disabled in settings"),
+                f"{', '.join(available)}" + ("" if enabled else " available but disabled in settings"),
                 ""
                 if enabled
-                else "Set video.hardware_accel to true for much faster exports on Apple Silicon.",
+                else "Set video.hardware_accel to true for faster exports on Mac or GPU workers.",
                 group="Media tools",
             )
         elif is_macos:
             yield Check(
-                "VideoToolbox",
+                "Hardware encoders",
                 Status.WARN,
                 "no VideoToolbox encoders in this FFmpeg build",
                 "Exports will use libx264 and be noticeably slower. A Homebrew FFmpeg "
@@ -224,9 +226,10 @@ class Doctor:
         else:
             software = sorted(n for n in encoders if n in {"libx264", "libx265", "libvpx-vp9"})
             yield Check(
-                "VideoToolbox",
+                "Hardware encoders",
                 Status.SKIP,
-                f"macOS only; using {', '.join(software) or 'software encoders'}",
+                f"no VideoToolbox/NVENC encoders; using {', '.join(software) or 'software encoders'}",
+                "On AWS, use a GPU instance with NVIDIA drivers and an FFmpeg build that includes NVENC.",
                 group="Media tools",
             )
 

@@ -30,6 +30,7 @@ from dripcut.services.notification_service import NotificationService
 from dripcut.services.project_service import ProjectService
 from dripcut.services.split_service import SplitService
 from dripcut.services.subtitle_service import SubtitleService
+from dripcut.services.youtube_service import YouTubeService
 
 __all__ = ["build_container", "AppContext"]
 
@@ -114,6 +115,7 @@ def build_container(
     notifications = NotificationService(events)
     ai_service = AIService(transcription, analysis, llm, events, resolved_settings, resolved_paths)
     media_service = MediaService(probe, video_engine, events, resolved_settings, resolved_paths)
+    youtube_service = YouTubeService(resolved_paths)
     project_service = ProjectService(resolved_paths, events)
     split_service = SplitService(
         split_registry, video_engine, runner, events, resolved_settings, ai_service
@@ -124,6 +126,7 @@ def build_container(
     container.register_instance(container.KEY_NOTIFICATIONS, notifications)
     container.register_instance(container.KEY_AI, ai_service)
     container.register_instance(container.KEY_MEDIA, media_service)
+    container.register_instance(container.KEY_YOUTUBE, youtube_service)
     container.register_instance(container.KEY_PROJECTS, project_service)
     container.register_instance(container.KEY_SPLIT, split_service)
     container.register_instance(container.KEY_SUBTITLES, subtitle_service)

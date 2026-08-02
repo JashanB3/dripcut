@@ -160,6 +160,33 @@ def test_service_queues_a_preset_export(container, media) -> None:
     assert job.status is JobStatus.SUCCEEDED, job.error
 
 
+def test_split_zip_archive_contains_every_clip(tmp_path) -> None:
+    from zipfile import ZipFile
+
+    from dripcut.services.split_service import SplitService
+
+    destination = tmp_path / "clips"
+    destination.mkdir()
+    clips = []
+    for index in range(2):
+        clip = destination / f"clip-{index:03d}.mp4"
+        clip.write_bytes(f"clip {index}".encode("utf-8"))
+        clips.append(clip)
+
+    archive = SplitService._zip_outputs(
+        clips,
+        destination,
+        stem="Sample Video",
+        output_format="portrait",
+        portrait_mode="ai_tracking",
+    )
+
+    assert archive.exists()
+    assert archive.name.startswith("Sample Video-portrait-ai_tracking")
+    with ZipFile(archive) as handle:
+        assert sorted(handle.namelist()) == sorted(clip.name for clip in clips)
+
+
 def test_batch_rejects_an_empty_list(container) -> None:
     with pytest.raises(ValidationError):
         container.export.queue_batch([], "resize")

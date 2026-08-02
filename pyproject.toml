@@ -32,6 +32,7 @@ dependencies = [
     "numpy>=1.26",
     "pillow>=10.0",
     "rich>=13.7",
+    "yt-dlp[default]",
 ]
 
 [project.optional-dependencies]
@@ -50,7 +51,7 @@ social_presets = "dripcut.plugins.builtin.social_presets:SocialPresetsPlugin"
 where = ["src"]
 
 [tool.setuptools.package-data]
-dripcut = ["ui/assets/*.css", "ui/assets/*.js", "ui/assets/*.svg", "py.typed"]
+dripcut = ["ui/assets/*.css", "ui/assets/*.js", "ui/assets/*.svg", "ui/assets/*.png", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

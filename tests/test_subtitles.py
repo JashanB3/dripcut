@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from dripcut.engines.subtitle.generator import SubtitleEngine
@@ -154,6 +156,33 @@ def test_scaled_style_grows() -> None:
     assert style.scaled(2.0).font_size > style.font_size
 
 
+def test_portrait_style_is_centered_and_compact() -> None:
+    style = CaptionStyle(font_size=58, margin_v=120, max_chars=38)
+    fitted = style.fitted_to_video(1080, 1920)
+
+    assert fitted.alignment == 5
+    assert fitted.font_size < style.font_size
+    assert fitted.max_chars <= 24
+
+
 def test_wrap_caption_balances_lines() -> None:
     wrapped = wrap_caption("one two three four five six seven eight", max_chars=14, max_lines=2)
     assert len(wrapped.splitlines()) <= 2
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
+def test_burn_uses_python_fallback_without_ffmpeg_subtitle_filter(
+    container, media, transcript: Transcript, tmp_path, monkeypatch
+) -> None:
+    runner = container.resolve("ffmpeg")
+    monkeypatch.setattr(runner, "has_filter", lambda _name: False)
+
+    output = container.subtitles.burn(
+        media,
+        transcript,
+        tmp_path / "captioned.mp4",
+        style=get_preset("Clean"),
+    )
+
+    assert output.exists() and output.stat().st_size > 0
+    assert container.media.import_file(output).duration > 5.0

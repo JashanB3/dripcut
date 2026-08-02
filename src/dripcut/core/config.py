@@ -29,6 +29,8 @@ __all__ = [
 ]
 
 ThemeName = Literal["dark", "light"]
+SplitOutputFormat = Literal["landscape", "portrait", "square"]
+PortraitMode = Literal["ai_tracking", "center_crop", "blur_background"]
 WhisperModelName = Literal["tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium"]
 ComputeType = Literal["int8", "int8_float16", "float16", "float32"]
 
@@ -85,12 +87,14 @@ class VideoSettings:
 class UISettings:
     """Presentation preferences."""
 
-    theme: ThemeName = "dark"
+    theme: ThemeName = "light"
     accent: str = "indigo"
     reduce_motion: bool = False
     show_status_bar: bool = True
     default_page: str = "dashboard"
     recent_limit: int = 12
+    split_output_format: SplitOutputFormat = "landscape"
+    split_portrait_mode: PortraitMode = "ai_tracking"
 
 
 @dataclass(slots=True)

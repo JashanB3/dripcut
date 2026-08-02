@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
 
+from dripcut.core.config import save_settings
 from dripcut.engines.video.encode import Quality
 from dripcut.models.clip import SplitMode
 from dripcut.ui.components.widgets import (
@@ -16,17 +21,18 @@ from dripcut.ui.components.widgets import (
     timeline_strip,
 )
 from dripcut.ui.pages.base import Page, PageContext, safe_call
+from dripcut.utils.fs import ensure_dir, human_size, safe_filename
 from dripcut.utils.timecode import format_duration
 
 __all__ = ["SplitPage"]
 
 _MODE_HELP: dict[str, str] = {
-    "fixed": "Even clips of a length you choose. Predictable, and the fastest to plan.",
-    "scene": "Cuts where the picture changes. Good for edited footage and screen recordings.",
-    "silence": "Cuts in the pauses. Good for talking-head video and podcasts.",
-    "timestamps": "Cuts exactly where you say. Paste times or ranges below.",
-    "chapters": "Uses chapter markers already embedded in the file.",
-    "ai_highlight": "Transcribes, then asks the local model for the strongest moments.",
+    "fixed": "Quick, even clips. Best when you already know the length you want.",
+    "scene": "Find visual changes automatically. Great for edited videos.",
+    "silence": "Cut around pauses. Nice for podcasts and talking-head clips.",
+    "timestamps": "Use your exact moments. Paste times or ranges below.",
+    "chapters": "Use chapter markers already inside the video.",
+    "ai_highlight": "Let AI pick the best moments for hooks, stories, and quotes.",
 }
 
 
@@ -34,11 +40,11 @@ class SplitPage(Page):
     """Plan a split, inspect it, then render it."""
 
     key = "split"
-    label = "Split"
+    label = "Make Clips"
     icon = "\u2702"
-    group = "Workspace"
-    title = "Split"
-    subtitle = "Plan first, look at what you got, then render."
+    group = "Create"
+    title = "Make Clips"
+    subtitle = "Drop a video, choose the vibe, and download a ready-to-post ZIP."
 
     def build(self, ctx: PageContext, *, visible: bool) -> gr.Column:
         """Compose the split workspace."""
@@ -46,36 +52,53 @@ class SplitPage(Page):
             plan_state = gr.State(None)
             media_state = gr.State(None)
 
-            with gr.Row():
+            with gr.Row(elem_classes=["dc-workspace-grid"], equal_height=False):
                 # ------------------------------------------------ left: inputs
-                with gr.Column(scale=2):
-                    source = gr.File(
-                        label="Video",
-                        type="filepath",
-                        elem_classes=["dc-dropzone"],
-                        elem_id="dc-split-source",
-                    )
-                    media_info = gr.HTML()
+                with gr.Column(scale=2, elem_classes=["dc-workspace-inputs"]):
+                    with gr.Tabs(elem_classes=["dc-source-tabs"]):
+                        with gr.Tab("Upload video"):
+                            source = gr.File(
+                                label="Video",
+                                type="filepath",
+                                elem_classes=["dc-dropzone"],
+                                elem_id="dc-split-source",
+                            )
+                        with gr.Tab("YouTube link"):
+                            youtube_url = gr.Textbox(
+                                label="YouTube video link",
+                                placeholder="https://www.youtube.com/watch?v=...",
+                                lines=1,
+                                elem_id="dc-split-youtube-url",
+                            )
+                            youtube_rights = gr.Checkbox(
+                                value=False,
+                                label="I have permission to download and edit this video",
+                            )
+                            youtube_import = gr.Button(
+                                "Use this YouTube video",
+                                elem_classes=["dc-btn", "dc-btn-secondary"],
+                                elem_id="dc-split-youtube-import",
+                            )
 
                     mode = gr.Dropdown(
                         choices=[(item.label, item.value) for item in SplitMode],
                         value=SplitMode.FIXED.value,
-                        label="Mode",
+                        label="How should we cut it?",
                         elem_id="dc-split-mode",
                     )
                     mode_help = gr.HTML(self._mode_help(SplitMode.FIXED.value))
 
                     with gr.Group():
                         clip_length = gr.Slider(
-                            5, 300, value=30, step=5, label="Clip length (seconds)"
+                            5, 300, value=30, step=5, label="Clip length"
                         )
-                        overlap = gr.Slider(0, 10, value=0, step=0.5, label="Overlap (seconds)")
+                        overlap = gr.Slider(0, 10, value=0, step=0.5, label="Overlap")
                         threshold = gr.Slider(
                             -60, 60, value=27, step=1,
-                            label="Sensitivity (scene score, or dB for silence)",
+                            label="Sensitivity",
                         )
                         timestamps = gr.Textbox(
-                            label="Cut points or ranges",
+                            label="Exact moments",
                             placeholder="0:30, 1:15, 2:40   or   0:10-0:25, 1:00-1:30",
                         )
                         max_clips = gr.Slider(1, 40, value=8, step=1, label="Maximum clips")
@@ -86,14 +109,14 @@ class SplitPage(Page):
                         )
 
                     plan_button = gr.Button(
-                        "Plan the split",
+                        "Plan my clips",
                         variant="primary",
                         elem_classes=["dc-btn", "dc-btn-primary"],
                         elem_id="dc-primary-split",
                     )
 
                 # ----------------------------------------------- right: result
-                with gr.Column(scale=3):
+                with gr.Column(scale=3, elem_classes=["dc-workspace-results"]):
                     message = gr.HTML()
                     summary = gr.HTML()
                     strip = gr.HTML(timeline_strip([]))
@@ -101,7 +124,7 @@ class SplitPage(Page):
 
                     with gr.Row():
                         container_choice = gr.Dropdown(
-                            choices=["mp4", "mov", "mkv", "webm"], value="mp4", label="Format"
+                            choices=["mp4", "mov", "mkv", "webm"], value="mp4", label="Container"
                         )
                         quality = gr.Dropdown(
                             choices=[q.value for q in Quality],
@@ -109,20 +132,43 @@ class SplitPage(Page):
                             label="Quality",
                         )
                         accurate = gr.Checkbox(
-                            value=True, label="Frame-accurate (slower, re-encodes)"
+                            value=False, label="Precise cuts"
                         )
-                    destination = gr.Textbox(
-                        label="Output folder",
-                        value=str(ctx.output_dir),
-                        placeholder=str(ctx.output_dir),
+                    with gr.Row():
+                        output_format = gr.Dropdown(
+                            [("Landscape", "landscape"), ("Portrait", "portrait"), ("Square", "square")],
+                            value=ctx.settings.ui.split_output_format,
+                            label="Output format",
+                        )
+                        portrait_mode = gr.Dropdown(
+                            [
+                                ("AI Tracking", "ai_tracking"),
+                                ("Center Crop", "center_crop"),
+                                ("Blur Background", "blur_background"),
+                            ],
+                            value=ctx.settings.ui.split_portrait_mode,
+                            label="Portrait mode",
+                        )
+                    gr.HTML(
+                        '<div class="dc-note-detail">Portrait is made for Reels, Shorts, and TikTok. Captions auto-fit the vertical canvas.</div>'
+                    )
+                    add_subtitles = gr.Checkbox(
+                        value=False,
+                        label="Add auto captions",
                     )
                     render_button = gr.Button(
-                        "Render clips",
+                        "Create my ZIP",
                         variant="primary",
                         elem_classes=["dc-btn", "dc-btn-primary"],
                         elem_id="dc-split-render",
                     )
-                    outputs = gr.Files(label="Rendered clips", visible=False)
+                    download = gr.DownloadButton(
+                        label="Download",
+                        value=None,
+                        visible=True,
+                        interactive=False,
+                        variant="primary",
+                    )
 
             # ------------------------------------------------------- behaviour
             mode.change(self._mode_help, inputs=mode, outputs=mode_help)
@@ -130,7 +176,20 @@ class SplitPage(Page):
             source.change(
                 lambda path: self._load(ctx, path),
                 inputs=source,
-                outputs=[media_state, media_info, message],
+                outputs=[media_state, message],
+            )
+
+            def import_youtube(
+                url: str,
+                confirmed: bool,
+                progress: gr.Progress = gr.Progress(),  # noqa: B008 - Gradio injection
+            ) -> tuple[Any, str]:
+                return self._import_youtube(ctx, url, confirmed, progress)
+
+            youtube_import.click(
+                import_youtube,
+                inputs=[youtube_url, youtube_rights],
+                outputs=[media_state, message],
             )
 
             plan_button.click(
@@ -142,11 +201,28 @@ class SplitPage(Page):
             )
 
             render_button.click(
-                lambda plan, media, fmt, qual, exact, folder: self._render(
-                    ctx, plan, media, fmt, qual, exact, folder
+                lambda plan, media, fmt, qual, exact, out_fmt, portrait, captions: self._render(
+                    ctx, plan, media, fmt, qual, exact, out_fmt, portrait, captions
                 ),
-                inputs=[plan_state, media_state, container_choice, quality, accurate, destination],
-                outputs=[outputs, message],
+                inputs=[
+                    plan_state,
+                    media_state,
+                    container_choice,
+                    quality,
+                    accurate,
+                    output_format,
+                    portrait_mode,
+                    add_subtitles,
+                ],
+                outputs=[download, message],
+            )
+            output_format.change(
+                lambda value, mode: self._remember_split_defaults(ctx, value, mode),
+                inputs=[output_format, portrait_mode],
+            )
+            portrait_mode.change(
+                lambda fmt, value: self._remember_split_defaults(ctx, fmt, value),
+                inputs=[output_format, portrait_mode],
             )
         return column
 
@@ -158,15 +234,41 @@ class SplitPage(Page):
         return f'<div class="dc-note-detail">{_MODE_HELP.get(str(mode), "")}</div>'
 
     @staticmethod
-    def _load(ctx: PageContext, path: str | None) -> tuple[Any, str, str]:
+    def _load(ctx: PageContext, path: str | None) -> tuple[Any, str]:
         """Probe the dropped file and show its properties."""
         if not path:
-            return None, "", ""
+            return None, ""
         media, error = safe_call(ctx.media.import_file, path)
         if error:
-            return None, "", error
-        rows = media.summary_rows()
-        return media, card(table(["Property", "Value"], rows), title=media.name), ""
+            return None, error
+        return media, banner(
+            f"{media.name} is ready. Plan the clips, then download the ZIP.",
+            level="success",
+            title="Video ready",
+        )
+
+    @staticmethod
+    def _import_youtube(
+        ctx: PageContext,
+        url: str,
+        confirmed: bool,
+        progress: gr.Progress = gr.Progress(),  # noqa: B008 - Gradio injection
+    ) -> tuple[Any, str]:
+        """Download a permitted YouTube video and feed it to the normal importer."""
+        if not confirmed:
+            return None, banner(
+                "Confirm that you have permission to use this video.",
+                level="warning",
+                title="Permission required",
+            )
+
+        def report(fraction: float, stage: str) -> None:
+            progress(min(max(fraction, 0.0), 1.0), desc=stage)
+
+        path, error = safe_call(ctx.youtube.download, url, on_progress=report)
+        if error or path is None:
+            return None, error
+        return SplitPage._load(ctx, str(path))
 
     @staticmethod
     def _plan(
@@ -253,12 +355,14 @@ class SplitPage(Page):
         container: str,
         quality: str,
         accurate: bool,
-        folder: str,
+        output_format: str,
+        portrait_mode: str,
+        add_subtitles: bool,
         progress: gr.Progress | None = None,
     ) -> tuple[Any, str]:
         """Render every segment in the current plan."""
         if plan is None:
-            return gr.update(visible=False), banner(
+            return gr.update(value=None, interactive=False), banner(
                 "Plan a split before rendering.", level="warning", title="No plan yet"
             )
 
@@ -267,25 +371,143 @@ class SplitPage(Page):
             if progress is not None:
                 progress(min(max(fraction, 0.0), 1.0), desc=stage)
 
-        target = Path(folder).expanduser() if folder.strip() else ctx.output_dir
-        paths, error = safe_call(
-            ctx.split.render,
-            plan,
-            target / media.stem,
-            container=str(container),
-            quality=Quality(str(quality)),
-            accurate=bool(accurate),
-            on_progress=report,
+        target = ensure_dir(
+            ctx.paths.temp
+            / "downloads"
+            / f"{safe_filename(media.stem, fallback='clips')}-{int(time.time())}"
         )
-        if error or not paths:
-            return gr.update(visible=False), error or banner(
-                "Nothing was written.", level="warning", title="Empty render"
+        render_args = {
+            "container": str(container),
+            "quality": Quality(str(quality)),
+            "accurate": bool(accurate),
+            "on_progress": report,
+            "output_format": str(output_format),
+            "portrait_mode": str(portrait_mode),
+        }
+
+        cleanup_paths: list[Path] = []
+        succeeded = False
+        try:
+            if add_subtitles:
+                transcript, error = safe_call(
+                    ctx.ai.transcribe,
+                    media.path,
+                    on_progress=lambda fraction, stage: report(fraction, f"Subtitles · {stage}"),
+                )
+                if error or transcript is None:
+                    return gr.update(value=None, interactive=False), error or banner(
+                        "The transcript could not be created, so captioned clips were not rendered.",
+                        level="error",
+                        title="Subtitles failed",
+                    )
+            if add_subtitles:
+                rendered, error = safe_call(ctx.split.render, plan, target / "raw", **render_args)
+                if error or not rendered:
+                    return gr.update(value=None, interactive=False), error or banner(
+                        "Nothing was written.", level="warning", title="Empty render"
+                    )
+                cleanup_paths.extend(rendered)
+                paths: list[Path] = []
+                caption_dir = ensure_dir(target / "captioned")
+                for clip, segment in zip(rendered, plan.segments, strict=False):
+                    clip_media, probe_error = safe_call(ctx.media.import_file, clip)
+                    if probe_error or clip_media is None:
+                        return gr.update(value=None, interactive=False), probe_error
+                    burned, burn_error = safe_call(
+                        ctx.subtitles.burn,
+                        clip_media,
+                        transcript,
+                        caption_dir / clip.name,
+                        quality=Quality(str(quality)),
+                        offset=float(segment.start),
+                        on_progress=report,
+                    )
+                    if burn_error or burned is None:
+                        return gr.update(value=None, interactive=False), burn_error or banner(
+                            "Caption rendering failed before the ZIP could be prepared.",
+                            level="error",
+                            title="Subtitles failed",
+                        )
+                    paths.append(burned)
+                    cleanup_paths.append(burned)
+                zip_path = ctx.split._zip_outputs(
+                    paths,
+                    caption_dir,
+                    stem=media.stem,
+                    output_format=str(output_format),
+                    portrait_mode=str(portrait_mode),
+                )
+            else:
+                rendered, error = safe_call(ctx.split.render_bundle, plan, target / "clips", **render_args)
+                if error or not rendered:
+                    return gr.update(value=None, interactive=False), error or banner(
+                        "Nothing was written.", level="warning", title="Empty render"
+                    )
+                paths, zip_path = rendered
+                cleanup_paths.extend(paths)
+
+            SplitPage._cleanup_clip_files(cleanup_paths)
+            SplitPage._record_render(ctx, media, paths, zip_path, output_format, add_subtitles)
+            succeeded = True
+            caption_note = " with captions" if add_subtitles else ""
+            detail = (
+                f"Rendered {len(paths)} clips{caption_note} and prepared "
+                f"{zip_path.name} ({human_size(zip_path.stat().st_size)})."
             )
-        return gr.update(value=[str(path) for path in paths], visible=True), banner(
-            f"Wrote {len(paths)} clips to {target / media.stem}",
-            level="success",
-            title="Render finished",
-        )
+            return (
+                gr.update(value=str(zip_path), label="Download", visible=True, interactive=True),
+                banner(detail, level="success", title="Download ready"),
+            )
+        finally:
+            if not succeeded:
+                shutil.rmtree(target, ignore_errors=True)
+
+    @staticmethod
+    def _record_render(
+        ctx: PageContext,
+        media: Any,
+        paths: list[Path],
+        zip_path: Path,
+        output_format: str,
+        add_subtitles: bool,
+    ) -> None:
+        """Persist the latest downloadable render for the dashboard."""
+        payload = {
+            "source": media.name,
+            "stem": media.stem,
+            "archive": str(zip_path),
+            "clip_count": len(paths),
+            "size_bytes": zip_path.stat().st_size if zip_path.exists() else 0,
+            "output_format": str(output_format),
+            "subtitles": bool(add_subtitles),
+            "created_at": time.time(),
+            "status": "Done",
+        }
+        target = ctx.paths.cache / "last_render.json"
+        try:
+            ensure_dir(target.parent)
+            target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    @staticmethod
+    def _cleanup_clip_files(paths: list[Path]) -> None:
+        """Remove temporary clip files once the ZIP is ready for download."""
+        parents = {path.parent for path in paths}
+        for path in paths:
+            with suppress(OSError):
+                path.unlink(missing_ok=True)
+        for parent in parents:
+            with suppress(OSError):
+                shutil.rmtree(parent)
+
+    @staticmethod
+    def _remember_split_defaults(ctx: PageContext, output_format: str, portrait_mode: str) -> None:
+        """Persist the last selected output options."""
+        ctx.settings.ui.split_output_format = str(output_format)
+        ctx.settings.ui.split_portrait_mode = str(portrait_mode)
+        with suppress(Exception):
+            save_settings(ctx.settings, ctx.container.paths.config_file)
 
     def commands(self) -> list[dict[str, str]]:
         """Navigation plus the page's two primary actions."""
@@ -304,4 +526,3 @@ class SplitPage(Page):
                 "keywords": "render export write clips",
             },
         ]
-

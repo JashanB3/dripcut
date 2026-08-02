@@ -117,6 +117,7 @@ class ServiceContainer(Container):
     KEY_EXPORT = "export"
     KEY_PROJECTS = "projects"
     KEY_MEDIA = "media"
+    KEY_YOUTUBE = "youtube"
     KEY_NOTIFICATIONS = "notifications"
     KEY_PLUGINS = "plugins"
 
@@ -139,6 +140,11 @@ class ServiceContainer(Container):
     def media(self) -> Any:
         """Media import / probing service."""
         return self.resolve(self.KEY_MEDIA)
+
+    @property
+    def youtube(self) -> Any:
+        """YouTube import service."""
+        return self.resolve(self.KEY_YOUTUBE)
 
     @property
     def video(self) -> Any:

@@ -45,12 +45,17 @@ def setup_logging(level: str = "INFO", *, quiet: bool = False) -> logging.Logger
         logger.addHandler(console_handler)
 
     log_file = app_paths().logs / "dripcut.log"
-    file_handler = logging.handlers.RotatingFileHandler(
-        log_file, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter(LOG_FORMAT_FILE))
-    logger.addHandler(file_handler)
+    try:
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+        )
+    except OSError:
+        # Logging must never stop the app from starting; fall back to console-only.
+        logger.warning("could not open log file at %s; continuing without file logging", log_file)
+    else:
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT_FILE))
+        logger.addHandler(file_handler)
 
     # Third-party libraries are noisy on import; keep them out of the console.
     for noisy in ("httpx", "urllib3", "faster_whisper", "matplotlib", "PIL", "asyncio"):

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 import gradio as gr
 
 from dripcut.core.errors import DripCutError
+from dripcut.core.logging import get_logger
 from dripcut.ui.components.widgets import banner
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -25,6 +26,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from dripcut.core.container import ServiceContainer
 
 __all__ = ["Page", "PageContext", "safe_call"]
+
+_log = get_logger("ui.pages")
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +60,11 @@ class PageContext:
     def media(self) -> Any:
         """Media import, probing, thumbnails and proxies."""
         return self.container.media
+
+    @property
+    def youtube(self) -> Any:
+        """YouTube video importer."""
+        return self.container.youtube
 
     @property
     def split(self) -> Any:
@@ -160,6 +168,13 @@ def safe_call(fn: Any, *args: Any, fallback: Any = None, **kwargs: Any) -> Any:
         hint = getattr(error, "hint", "") or ""
         level = "warning" if type(error).__name__ in {"ValidationError", "SplitPlanError"} else "error"
         return fallback, banner(f"{message} {hint}".strip(), level=level, title=_title_for(error))
+    except Exception as error:  # noqa: BLE001 - event handlers should not show raw Gradio errors
+        _log.exception("unexpected UI action failure")
+        return fallback, banner(
+            f"{type(error).__name__}: {str(error)[:220]}",
+            level="error",
+            title="Something went wrong",
+        )
 
 
 def _title_for(error: Exception) -> str:

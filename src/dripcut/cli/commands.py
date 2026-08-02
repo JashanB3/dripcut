@@ -23,6 +23,7 @@ from dripcut.core.bootstrap import build_container
 from dripcut.core.config import load_settings, save_settings
 from dripcut.core.errors import DripCutError, ValidationError
 from dripcut.core.logging import get_logger
+from dripcut.core.network import pick_server_port
 from dripcut.core.paths import app_paths
 from dripcut.engines.export.presets import EXPORT_PRESETS, preset_names
 from dripcut.engines.video.encode import Quality
@@ -196,6 +197,13 @@ def cmd_up(args: Namespace) -> int:
 
     container = _container(args)
     settings = container.settings
+
+    resolved_port = pick_server_port(settings.server.host, settings.server.port)
+    if resolved_port != settings.server.port:
+        console.print(
+            f"[yellow]\u25b2[/yellow] Port {settings.server.port} is busy; using {resolved_port} instead"
+        )
+        settings.server.port = resolved_port
 
     if settings.ai.enable_ai and settings.ai.auto_start_ollama:
         console.print("[bright_black]\u00b7 preparing AI services\u2026[/bright_black]")
@@ -657,4 +665,3 @@ SPLIT_MODES: tuple[str, ...] = tuple(mode.value for mode in SplitMode)
 QUALITIES: tuple[str, ...] = tuple(quality.value for quality in Quality)
 SUBTITLE_FORMATS: tuple[str, ...] = (*(fmt.value for fmt in SubtitleFormat), "none")
 PRESET_NAMES: tuple[str, ...] = tuple(preset_names())
-

@@ -75,3 +75,32 @@ class CaptionStyle:
         clone.margin_v = max(8, int(round(self.margin_v * factor)))
         clone.margin_h = max(8, int(round(self.margin_h * factor)))
         return clone
+
+    def fitted_to_video(self, width: int, height: int) -> CaptionStyle:
+        """Return a style tuned for the actual rendered frame.
+
+        Portrait clips need different caption geometry from landscape clips: using
+        the 1920px height to scale text makes subtitles huge and too wide for a
+        9:16 canvas. The portrait fit scales from width, shortens lines, and moves
+        captions to the center so they read like mobile-first social captions.
+        """
+        width = max(1, int(width or 1))
+        height = max(1, int(height or 1))
+        if height > width * 1.1:
+            factor = min(width / 1080, height / 1920)
+            clone = self.scaled(factor)
+            clone.alignment = 5
+            clone.font_size = max(28, min(50, int(round(clone.font_size * 0.88))))
+            if clone.outline_width > 0:
+                clone.outline_width = round(max(1.8, min(3.2, clone.outline_width * 0.85)), 2)
+            clone.margin_h = max(48, int(width * 0.09))
+            clone.margin_v = max(24, int(height * 0.04))
+            clone.max_chars = min(clone.max_chars, 24)
+            clone.max_lines = min(max(1, clone.max_lines), 2)
+            return clone
+        if abs(width - height) <= max(width, height) * 0.12:
+            clone = self.scaled(min(width, height) / 1080)
+            clone.max_chars = min(clone.max_chars, 30)
+            clone.max_lines = min(max(1, clone.max_lines), 2)
+            return clone
+        return self.scaled(height / 1080)

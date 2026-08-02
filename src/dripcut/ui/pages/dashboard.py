@@ -1,150 +1,241 @@
-"""Dashboard: what the app knows right now, and the fastest way into the work."""
+"""Dashboard: the quickest path back to the latest render."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 import gradio as gr
 
 from dripcut.ui.components.widgets import (
-    banner,
     card,
-    chips,
     empty_state,
-    notes_list,
-    stat_grid,
+    recent_strip,
+    studio_bar,
     table,
+    tool_cards,
 )
 from dripcut.ui.pages.base import Page, PageContext
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    pass
+from dripcut.utils.fs import human_size
 
 __all__ = ["DashboardPage"]
 
 
 class DashboardPage(Page):
-    """Landing page. Read-only by design: it reports, it does not mutate."""
+    """A product-facing landing page focused on recent output."""
 
     key = "dashboard"
-    label = "Dashboard"
+    label = "Home"
     icon = "\u25f4"
-    group = "Overview"
-    title = "Dashboard"
-    subtitle = "Everything is local. Nothing leaves this machine."
+    group = "Studio"
+    title = "Home"
+    subtitle = "Start something, or pick up where you left off."
+
+    #: The tool deck: ``(page key, glyph, name, what it is for)``.
+    TOOLS: tuple[tuple[str, str, str, str], ...] = (
+        ("split", "\u2702", "Make clips", "Cut one video into posts"),
+        ("subtitles", "\u2263", "Captions", "Burn in readable subtitles"),
+        ("ai_studio", "\u25c8", "AI clips", "Find the moments worth posting"),
+        ("workspace", "\u25a3", "Edit tools", "Trim, crop, convert, watermark"),
+        ("batch", "\u2637", "Bulk edit", "Run one action across a folder"),
+        ("exports", "\u2913", "Downloads", "Everything rendered, ready to grab"),
+    )
 
     def build(self, ctx: PageContext, *, visible: bool) -> gr.Column:
-        """Compose the dashboard."""
+        """Compose the home deck."""
+        last = self._last_render(ctx)
         with gr.Column(visible=visible, elem_classes=["dc-page"]) as column:
-            stats = gr.HTML(self._stats(ctx))
-            with gr.Row():
-                with gr.Column(scale=3):
-                    recent = gr.HTML(self._recent(ctx))
-                    capabilities = gr.HTML(self._capabilities(ctx))
-                with gr.Column(scale=2):
-                    activity = gr.HTML(self._activity(ctx))
-                    storage = gr.HTML(self._storage(ctx))
-            refresh = gr.Button(
-                "Refresh",
-                elem_classes=["dc-btn", "dc-btn-quiet"],
-                elem_id="dc-primary-dashboard",
+            gr.HTML(self._studio(ctx, last))
+            gr.HTML(tool_cards(self.TOOLS))
+
+            gr.HTML(
+                '<div class="dc-section-title">Pick up where you left off</div>'
             )
+            recent = gr.HTML(self._recent_projects(ctx))
+
+            with gr.Row(elem_classes=["dc-home-split"], equal_height=False):
+                latest = gr.HTML(self._recent(last))
+                with gr.Column(
+                    scale=0, min_width=300, elem_classes=["dc-side-card"]
+                ):
+                    ready = gr.HTML(self._ready_panel(last))
+                    download = gr.DownloadButton(
+                        "Download ZIP",
+                        value=self._archive_value(last),
+                        visible=True,
+                        interactive=bool(self._archive_value(last)),
+                        variant="primary",
+                    )
+                    refresh = gr.Button(
+                        "Refresh",
+                        elem_classes=["dc-btn", "dc-btn-quiet"],
+                        elem_id="dc-primary-dashboard",
+                    )
+
+            def refresh_dashboard() -> tuple[str, str, str, Any]:
+                fresh = self._last_render(ctx)
+                archive = self._archive_value(fresh)
+                return (
+                    self._recent_projects(ctx),
+                    self._recent(fresh),
+                    self._ready_panel(fresh),
+                    gr.update(value=archive, interactive=bool(archive)),
+                )
+
             refresh.click(
-                lambda: (
-                    self._stats(ctx),
-                    self._recent(ctx),
-                    self._capabilities(ctx),
-                    self._activity(ctx),
-                    self._storage(ctx),
-                ),
-                outputs=[stats, recent, capabilities, activity, storage],
+                refresh_dashboard, outputs=[recent, latest, ready, download]
             )
         return column
 
     # ------------------------------------------------------------------ panels
 
-    def _stats(self, ctx: PageContext) -> str:
-        """Headline counts across projects, clips and the job queue."""
-        projects = ctx.projects.list_projects()
-        clips = sum(getattr(project, "clip_count", 0) for project in projects)
+    def _studio(self, ctx: PageContext, last: dict[str, Any] | None) -> str:
+        """The masthead, including whether the machine is ready to render."""
         counts = ctx.queue.stats()
-        return stat_grid(
-            [
-                ("Projects", len(projects)),
-                ("Clips planned", clips),
-                ("Jobs done", counts.get("succeeded", 0)),
-                ("In flight", counts.get("running", 0) + counts.get("queued", 0)),
-            ]
+        running = int(counts.get("running", 0)) + int(counts.get("queued", 0))
+        try:
+            engine_ok = bool(ctx.container.resolve("ffmpeg").version())
+        except Exception:  # noqa: BLE001 - the masthead must never raise
+            engine_ok = False
+        try:
+            ai = ctx.ai.status()
+            ai_ready = bool(ai.get("whisper_installed"))
+        except Exception:  # noqa: BLE001 - ditto
+            ai_ready = False
+
+        signals = [
+            ("Render engine", "on" if engine_ok else "off"),
+            ("Captions", "on" if ai_ready else "warn"),
+            (
+                f"{running} in the queue" if running else "Queue clear",
+                "busy" if running else "on",
+            ),
+        ]
+        if last and self._archive_value(last):
+            detail = (
+                f"Your last render finished with "
+                f"{int(last.get('clip_count', 0) or 0)} clips. "
+                "Grab the ZIP below, or start the next one."
+            )
+        else:
+            detail = (
+                "Bring in a video and DripCut cuts it into captioned clips "
+                "sized for the platform you are posting to."
+            )
+        return studio_bar(
+            greeting="DripCut studio",
+            headline="What will you clip today?",
+            detail=detail,
+            action="Make clips",
+            action_target="split",
+            secondary="Open projects",
+            secondary_target="projects",
+            signals=signals,
         )
 
-    def _recent(self, ctx: PageContext) -> str:
-        """Recently imported media, newest first."""
-        recent = ctx.media.recent(limit=ctx.settings.ui.recent_limit)
-        if not recent:
+    def _recent_projects(self, ctx: PageContext) -> str:
+        """Recent projects, newest first."""
+        try:
+            summaries = ctx.projects.list_projects(limit=6)
+        except Exception:  # noqa: BLE001 - a bad manifest must not blank the page
+            summaries = []
+        items = [
+            {
+                "name": item.name,
+                "meta": f"{getattr(item, 'duration_label', '')} \u00b7 "
+                f"{getattr(item, 'clip_count', 0)} clips \u00b7 "
+                f"{getattr(item, 'updated_label', '')}".strip(" \u00b7"),
+                "thumbnail": str(getattr(item, "thumbnail", "") or ""),
+            }
+            for item in summaries
+        ]
+        return recent_strip(items)
+
+    def _ready_panel(self, last: dict[str, Any] | None) -> str:
+        """The download side card: what is waiting, and how big it is.
+
+        The button underneath is a real Gradio control, so this fragment covers
+        only the description above it. When nothing has rendered it says so and
+        points at the one action that fixes that.
+        """
+        archive = self._archive_value(last)
+        if not archive or not last:
+            return (
+                '<div class="dc-ready dc-ready-empty">'
+                '<div class="dc-ready-eyebrow">Your ZIP</div>'
+                "<div class=\"dc-ready-headline\">Nothing rendered yet</div>"
+                "<p>Make a set of clips and the archive lands here, "
+                "ready to download in one click.</p>"
+                "</div>"
+            )
+        path = Path(archive)
+        size = human_size(path.stat().st_size) if path.exists() else "\u2014"
+        clips = int(last.get("clip_count", 0) or 0)
+        return (
+            '<div class="dc-ready">'
+            '<div class="dc-ready-eyebrow">Your ZIP</div>'
+            f'<div class="dc-ready-headline">{clips} clips \u00b7 {size}</div>'
+            f'<p class="dc-ready-file">{path.name}</p>'
+            "</div>"
+        )
+
+    def _recent(self, last: dict[str, Any] | None) -> str:
+        """Latest render details with the archive state."""
+        if not last:
             return card(
                 empty_state(
-                    "No media yet",
-                    "Open Split and drop a video in to get started.",
+                    "No edit yet",
+                    "Open Make Clips, upload a video, create clips, then download the ZIP here.",
                 ),
-                title="Recent media",
+                title="Latest edit",
             )
-        rows = []
-        for path in recent:
-            try:
-                size = f"{path.stat().st_size / (1024 * 1024):.1f} MB"
-            except OSError:
-                size = "\u2014"
-            rows.append((path.name, path.suffix.lstrip(".").upper() or "\u2014", size))
-        return card(table(["File", "Type", "Size"], rows), title="Recent media")
-
-    def _capabilities(self, ctx: PageContext) -> str:
-        """Which optional subsystems are usable right now."""
-        status = ctx.ai.status()
-        ready, missing = [], []
-        (ready if status["whisper_installed"] else missing).append("Transcription")
-        (ready if status["ollama_up"] else missing).append("Ollama")
-        (ready if status["ollama_model_installed"] else missing).append(
-            f"Model {status['ollama_model']}"
-        )
-        plugin_names = [record.meta.name for record in ctx.plugins.records() if record.enabled]
-        body = chips(ready, mint=ready) + chips(missing)
-        if plugin_names:
-            body += f'<div class="dc-note-detail">Plugins: {", ".join(plugin_names)}</div>'
-        if missing:
-            body += banner(
-                "Video tools all work without these. Run 'dripcut doctor' for setup steps.",
-                level="info",
-            )
-        return card(body, title="Capabilities", eyebrow="AI is optional")
-
-    def _activity(self, ctx: PageContext) -> str:
-        """The notification centre's recent entries."""
-        return card(notes_list(ctx.notifications.recent(limit=8)), title="Activity")
-
-    def _storage(self, ctx: PageContext) -> str:
-        """Where things are written, and how much room is left."""
-        from dripcut.utils.fs import free_space_gb  # noqa: PLC0415
-
-        report = ctx.projects.storage_report()
+        archive = Path(str(last.get("archive", "")))
         rows = [
-            ("Output", str(ctx.output_dir)),
-            ("Projects", str(ctx.paths.projects)),
-            ("Cache", str(ctx.paths.cache)),
-            ("Free", f"{free_space_gb(ctx.output_dir):.1f} GB"),
+            ("Video", str(last.get("source", "Untitled"))),
+            ("Status", str(last.get("status", "Done"))),
+            ("Clips", str(last.get("clip_count", 0))),
+            ("Format", str(last.get("output_format", "landscape")).title()),
+            ("Subtitles", "Yes" if last.get("subtitles") else "No"),
+            ("Archive", archive.name if archive.exists() else "Preparing again required"),
+            ("Size", human_size(archive.stat().st_size) if archive.exists() else "Unavailable"),
+            ("Rendered", self._when(last.get("created_at"))),
         ]
-        if isinstance(report, dict):
-            for label, value in report.items():
-                rows.append((str(label).replace("_", " ").title(), str(value)))
-        return card(table(["Location", "Path"], rows), title="Storage")
+        return card(table(["Detail", "Value"], rows), title="Latest edit")
+
+    @staticmethod
+    def _last_render(ctx: PageContext) -> dict[str, Any] | None:
+        """Read the last render record written by Split."""
+        path = ctx.paths.cache / "last_render.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _archive_value(last: dict[str, Any] | None) -> str | None:
+        if not last:
+            return None
+        archive = Path(str(last.get("archive", "")))
+        return str(archive) if archive.exists() else None
+
+    @staticmethod
+    def _when(timestamp: Any) -> str:
+        try:
+            return datetime.fromtimestamp(float(timestamp)).strftime("%b %d, %I:%M %p")
+        except (TypeError, ValueError, OSError):
+            return "Just now"
 
     def commands(self) -> list[dict[str, str]]:
-        """Navigation plus the dashboard's own refresh action."""
+        """Navigation plus the dashboard refresh action."""
         return [
             *super().commands(),
             {
                 "label": "Refresh dashboard",
                 "group": "Dashboard",
                 "target": "dc-primary-dashboard",
-                "keywords": "reload update stats",
+                "keywords": "reload update latest render download",
             },
         ]

@@ -27,12 +27,16 @@ def test_output_path_is_expanded(settings) -> None:
 def test_to_dict_round_trips(paths) -> None:
     original = Settings()
     original.ui.theme = "light"
+    original.ui.split_output_format = "portrait"
+    original.ui.split_portrait_mode = "blur_background"
     original.video.crf = 19
     original.ai.whisper_model = "base"
     save_settings(original, paths.config_file)
 
     reloaded = load_settings(paths.config_file)
     assert reloaded.ui.theme == "light"
+    assert reloaded.ui.split_output_format == "portrait"
+    assert reloaded.ui.split_portrait_mode == "blur_background"
     assert reloaded.video.crf == 19
     assert reloaded.ai.whisper_model == "base"
 
@@ -82,6 +86,6 @@ def test_validate_rejects_a_bad_port() -> None:
 
 def test_reset_restores_defaults(paths) -> None:
     changed = Settings()
-    changed.ui.theme = "light"
+    changed.ui.theme = "dark"
     save_settings(changed, paths.config_file)
-    assert reset_settings(paths.config_file).ui.theme == "dark"
+    assert reset_settings(paths.config_file).ui.theme == "light"

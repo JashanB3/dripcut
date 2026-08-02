@@ -23,6 +23,7 @@ __all__ = [
     "clip_card",
     "commands_script",
     "empty_state",
+    "home_hero",
     "kbd",
     "notes_list",
     "page_header",
@@ -33,7 +34,11 @@ __all__ = [
     "status_dot",
     "table",
     "timecode",
+    "recent_strip",
+    "studio_bar",
     "timeline_strip",
+    "tool_cards",
+    "tool_tiles",
 ]
 
 _LEVEL_ICONS: Mapping[str, str] = {
@@ -296,3 +301,179 @@ def commands_script(commands: Sequence[Mapping[str, Any]]) -> str:
     """
     payload = json.dumps(list(commands), separators=(",", ":"))
     return f'<script type="application/json" id="dc-commands-data">{payload}</script>'
+
+
+# ------------------------------------------------------------------- home deck
+
+
+def tool_tiles(tools: Sequence[tuple[str, str, str]]) -> str:
+    """Round shortcuts to the things a person actually came here to do.
+
+    Args:
+        tools: ``(nav_key, glyph, label)`` triples. ``nav_key`` is a page key;
+            the tile activates that page's sidebar button, so the router stays
+            the single source of truth for navigation and there is no second
+            code path that can drift.
+
+    Returns:
+        Markup for the tile row.
+    """
+    tiles = []
+    for key, glyph, label in tools:
+        target = f"dc-nav-{_esc(key)}"
+        handler = (
+            f"var b=document.getElementById('{target}');"
+            "if(b){b.click();window.scrollTo({top:0,behavior:'smooth'});}"
+        )
+        tiles.append(
+            f'<button type="button" class="dc-tool" onclick="{handler}" '
+            f'aria-label="{_esc(label)}"><i aria-hidden="true">{glyph}</i>'
+            f"<span>{_esc(label)}</span></button>"
+        )
+    return f'<div class="dc-tools">{"".join(tiles)}</div>'
+
+
+def home_hero(
+    *,
+    headline: str,
+    highlight: str,
+    detail: str,
+    prompt: str,
+    action: str,
+    action_target: str,
+    tools: Sequence[tuple[str, str, str]] = (),
+) -> str:
+    """The landing panel: one question, one obvious next step, then the tools.
+
+    Args:
+        headline: Text before the highlighted word.
+        highlight: The word painted with the brand gradient.
+        detail: One supporting line.
+        prompt: Placeholder text in the start bar.
+        action: Label on the start button.
+        action_target: Page key the start bar opens.
+        tools: Tiles rendered under the start bar.
+    """
+    target = f"dc-nav-{_esc(action_target)}"
+    handler = f"var b=document.getElementById('{target}');if(b){{b.click();}}"
+    return (
+        '<section class="dc-home-hero">'
+        f"<h1>{_esc(headline)} <em>{_esc(highlight)}</em></h1>"
+        f"<p>{_esc(detail)}</p>"
+        f'<div class="dc-home-search" role="button" tabindex="0" onclick="{handler}" '
+        f'onkeydown="if(event.key===\'Enter\'){{{handler}}}">'
+        '<span class="dc-home-search-icon" aria-hidden="true">\u2315</span>'
+        f'<span class="dc-home-search-text">{_esc(prompt)}</span>'
+        f"<b>{_esc(action)}</b></div>"
+        + (tool_tiles(tools) if tools else "")
+        + "</section>"
+    )
+
+
+def tool_cards(tools: Sequence[tuple[str, str, str, str]]) -> str:
+    """The tool deck.
+
+    Cards rather than round tiles: each one names what it does and what it is
+    for, which is the difference between a launcher a professional can scan and
+    a row of decorations.
+
+    Args:
+        tools: ``(nav_key, glyph, title, description)``.
+    """
+    cards = []
+    for key, glyph, title, detail in tools:
+        target = f"dc-nav-{_esc(key)}"
+        handler = f"var b=document.getElementById('{target}');if(b){{b.click();}}"
+        cards.append(
+            f'<button type="button" class="dc-tool-card" onclick="{handler}">'
+            f'<span class="dc-tool-chip" aria-hidden="true">{glyph}</span>'
+            f'<span class="dc-tool-copy"><span class="dc-tool-name">{_esc(title)}</span>'
+            f'<span class="dc-tool-detail">{_esc(detail)}</span></span>'
+            '<span class="dc-tool-go" aria-hidden="true">\u2192</span>'
+            "</button>"
+        )
+    return f'<div class="dc-tool-deck">{"".join(cards)}</div>'
+
+
+def studio_bar(
+    *,
+    greeting: str,
+    headline: str,
+    detail: str,
+    action: str,
+    action_target: str,
+    secondary: str = "",
+    secondary_target: str = "",
+    signals: Sequence[tuple[str, str]] = (),
+) -> str:
+    """The masthead: who you are, what to do next, and whether the box is ready.
+
+    Args:
+        greeting: Small line above the headline.
+        headline: The one sentence that names the job.
+        detail: Supporting line.
+        action: Primary button label.
+        action_target: Page key the primary button opens.
+        secondary: Optional second button label.
+        secondary_target: Page key for the second button.
+        signals: ``(label, state)`` pairs shown as engine readouts, where state
+            is ``on``, ``warn`` or ``off``.
+    """
+    def _go(key: str) -> str:
+        return f"var b=document.getElementById('dc-nav-{_esc(key)}');if(b){{b.click();}}"
+
+    buttons = (
+        f'<button type="button" class="dc-studio-primary" '
+        f'onclick="{_go(action_target)}">{_esc(action)}</button>'
+    )
+    if secondary and secondary_target:
+        buttons += (
+            f'<button type="button" class="dc-studio-secondary" '
+            f'onclick="{_go(secondary_target)}">{_esc(secondary)}</button>'
+        )
+    readouts = "".join(
+        f'<span class="dc-signal"><i class="dc-dot dc-{_esc(state)}"></i>{_esc(label)}</span>'
+        for label, state in signals
+    )
+    return (
+        '<section class="dc-studio">'
+        '<div class="dc-studio-copy">'
+        f'<div class="dc-studio-greeting">{_esc(greeting)}</div>'
+        f"<h1>{_esc(headline)}</h1>"
+        f"<p>{_esc(detail)}</p>"
+        f'<div class="dc-studio-actions">{buttons}</div>'
+        "</div>"
+        f'<div class="dc-studio-signals">{readouts}</div>'
+        "</section>"
+    )
+
+
+def recent_strip(
+    projects: Sequence[Mapping[str, Any]], *, nav_key: str = "projects"
+) -> str:
+    """Recent work, as a row of cards that open the library.
+
+    Args:
+        projects: Mappings with ``name``, ``meta`` and optionally ``thumbnail``.
+        nav_key: Page opened when a card is clicked.
+    """
+    handler = f"var b=document.getElementById('dc-nav-{_esc(nav_key)}');if(b){{b.click();}}"
+    if not projects:
+        return (
+            '<div class="dc-recent-empty">'
+            "<strong>No projects yet</strong>"
+            "<span>Whatever you clip next shows up here so you can pick it "
+            "back up.</span></div>"
+        )
+    cards = []
+    for item in projects:
+        thumb = _esc(item.get("thumbnail", ""))
+        style = f' style="background-image:url({thumb})"' if thumb else ""
+        cards.append(
+            f'<button type="button" class="dc-recent-card" onclick="{handler}">'
+            f'<span class="dc-recent-thumb"{style}></span>'
+            f'<span class="dc-recent-name">{_esc(item.get("name", "Untitled"))}</span>'
+            f'<span class="dc-recent-meta">{_esc(item.get("meta", ""))}</span>'
+            "</button>"
+        )
+    return f'<div class="dc-recent-row">{"".join(cards)}</div>'

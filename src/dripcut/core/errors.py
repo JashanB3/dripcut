@@ -13,6 +13,7 @@ __all__ = [
     "ValidationError",
     "DependencyError",
     "MediaProbeError",
+    "MediaDownloadError",
     "FFmpegError",
     "SplitPlanError",
     "TranscriptionError",
@@ -50,6 +51,10 @@ class DependencyError(DripCutError):
 
 class MediaProbeError(DripCutError):
     """ffprobe could not describe the file."""
+
+
+class MediaDownloadError(DripCutError):
+    """A remote video could not be downloaded into the temporary workspace."""
 
 
 class FFmpegError(DripCutError):

@@ -27,11 +27,11 @@ class WorkspacePage(Page):
     """Trim, transform, compress, convert, extract and watermark one file."""
 
     key = "workspace"
-    label = "Workspace"
+    label = "Edit Tools"
     icon = "\u25a3"
-    group = "Workspace"
-    title = "Workspace"
-    subtitle = "One file, every tool. Each action queues a job you can watch in Exports."
+    group = "Create"
+    title = "Edit Tools"
+    subtitle = "Quick fixes for one video: trim, convert, watermark, audio, and more."
 
     def __init__(self) -> None:
         self._ctx: PageContext | None = None

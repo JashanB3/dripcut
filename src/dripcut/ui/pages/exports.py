@@ -31,11 +31,11 @@ class ExportsPage(Page):
     """Watch the queue, cancel work, and collect finished files."""
 
     key = "exports"
-    label = "Exports"
+    label = "Downloads"
     icon = "\u2913"
-    group = "Output"
-    title = "Exports"
-    subtitle = "Every job, its progress, and where the files landed."
+    group = "Library"
+    title = "Downloads"
+    subtitle = "Your finished files and ZIPs, ready when the render is done."
 
     def __init__(self) -> None:
         self._ctx: PageContext | None = None
@@ -77,7 +77,7 @@ class ExportsPage(Page):
                 )
 
             recent = gr.HTML(self._recent())
-            outputs = gr.Files(label="Finished files", visible=False)
+            outputs = gr.Files(label="Finished files", file_count="multiple", visible=False)
             collect = gr.Button(
                 "Collect finished files", elem_classes=["dc-btn"], elem_id="dc-exports-collect"
             )

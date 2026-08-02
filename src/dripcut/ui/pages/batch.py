@@ -32,11 +32,11 @@ class BatchPage(Page):
     """Import a folder, pick one operation, queue it."""
 
     key = "batch"
-    label = "Batch"
+    label = "Bulk Edit"
     icon = "\u2637"
-    group = "Workspace"
-    title = "Batch processing"
-    subtitle = "Point at a folder, choose one operation, and let the queue work through it."
+    group = "Create"
+    title = "Bulk Edit"
+    subtitle = "Drop a folder, pick one action, and let DripCut handle the boring part."
 
     def __init__(self) -> None:
         self._ctx: PageContext | None = None

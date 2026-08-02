@@ -34,6 +34,7 @@ from dripcut.engines.ffmpeg.filters import (
 from dripcut.engines.ffmpeg.probe import MediaProbe
 from dripcut.engines.ffmpeg.runner import FFmpegRunner, ProgressCallback
 from dripcut.engines.video.encode import AudioMode, EncodeSettings, Quality  # noqa: F401
+from dripcut.engines.video.portrait import build_blur_background_filters, build_tracked_crop
 from dripcut.models.media import MediaInfo
 from dripcut.utils.concurrency import CancelToken
 from dripcut.utils.fs import ensure_dir, unique_path
@@ -361,6 +362,69 @@ class VideoEngine:
             cancel_token=cancel_token,
             outputs=[target],
             stage="Rendering",
+        )
+        return target
+
+    def portrait_transform(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        mode: str = "ai_tracking",
+        target_size: tuple[int, int] = (1080, 1920),
+        settings: EncodeSettings | None = None,
+        on_progress: ProgressCallback | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> Path:
+        """Render a 9:16 portrait clip with tracking or a blurred backdrop."""
+        info = self._info(source)
+        container = destination.suffix.lstrip(".").lower() or "mp4"
+        config = settings or EncodeSettings.for_container(container)
+        config.stream_copy = False
+        target = self._finalise(destination, overwrite=True)
+        width, height = target_size
+        mode_name = str(mode)
+
+        if mode_name == "blur_background":
+            filter_complex = ";".join(build_blur_background_filters(width, height))
+            args: list[str] = ["-i", str(info.path), "-filter_complex", filter_complex, "-map", "[outv]"]
+            if info.has_audio:
+                args += ["-map", "0:a"]
+        else:
+            graph = FilterGraph()
+            if mode_name == "ai_tracking" and info.video and info.video.orientation == "landscape":
+                analysis = build_tracked_crop(
+                    info.path,
+                    info.duration,
+                    target_aspect=width / height,
+                    on_progress=on_progress,
+                )
+                if analysis.has_tracking:
+                    crop = analysis.crop
+                    graph.add(
+                        "crop="
+                        f"w='trunc(({crop.width})/2)*2':"
+                        f"h='trunc(({crop.height})/2)*2':"
+                        f"x='trunc(({crop.x})/2)*2':"
+                        f"y='trunc(({crop.y})/2)*2'"
+                    )
+                else:
+                    graph.extend(scale_filter(width, height, mode=ScaleMode.FILL))
+            else:
+                graph.extend(scale_filter(width, height, mode=ScaleMode.FILL))
+            graph.add(f"scale={width}:{height}:flags=lanczos")
+            graph.ensure_even()
+            args = ["-i", str(info.path), *graph.as_args()]
+
+        args += config.build_args(video_encoder=self._encoder(config), has_audio=info.has_audio)
+        args.append(str(target))
+        self.runner.run(
+            args,
+            duration=info.duration,
+            on_progress=on_progress,
+            cancel_token=cancel_token,
+            outputs=[target],
+            stage="Rendering portrait",
         )
         return target
 

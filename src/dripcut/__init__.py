@@ -20,4 +20,4 @@ __all__ = ["__version__", "APP_NAME", "APP_TAGLINE"]
 __version__ = "1.0.0rc1"
 
 APP_NAME = "DripCut"
-APP_TAGLINE = "Local video toolkit with AI on board"
+APP_TAGLINE = "Edit your vibe in a few clicks"

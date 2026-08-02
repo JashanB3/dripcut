@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from dripcut.engines.ffmpeg.filters import (
@@ -97,6 +99,15 @@ def test_videotoolbox_uses_quality_not_crf() -> None:
     assert "-crf" not in args, "VideoToolbox takes -q:v, not -crf"
 
 
+def test_nvenc_uses_constant_quality_not_software_crf() -> None:
+    args = EncodeSettings(quality=Quality.BALANCED).build_args(
+        video_encoder="h264_nvenc", has_audio=False
+    )
+    assert "-cq:v" in args
+    assert "-crf" not in args
+    assert args[args.index("-preset") + 1] == "p4"
+
+
 def test_muted_output_has_no_audio_codec() -> None:
     args = EncodeSettings(audio_mode=AudioMode.MUTE).build_args(
         video_encoder="libx264", has_audio=True
@@ -114,6 +125,138 @@ def test_runner_picks_a_usable_encoder() -> None:
     runner = FFmpegRunner("ffmpeg")
     chosen = runner.pick_video_encoder("h264")
     assert chosen in runner.available_encoders()
+
+
+def test_runner_picks_nvenc_when_videotoolbox_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        FFmpegRunner,
+        "available_encoders",
+        lambda self: frozenset({"h264_nvenc", "libx264", "aac"}),
+    )
+    runner = FFmpegRunner("ffmpeg", hardware_accel=True)
+    assert runner.pick_video_encoder("h264") == "h264_nvenc"
+
+
+def test_runner_respects_hardware_disabled_with_nvenc(monkeypatch) -> None:
+    monkeypatch.setattr(
+        FFmpegRunner,
+        "available_encoders",
+        lambda self: frozenset({"h264_nvenc", "libx264", "aac"}),
+    )
+    runner = FFmpegRunner("ffmpeg", hardware_accel=False)
+    assert runner.pick_video_encoder("h264") == "libx264"
+
+
+def test_runner_retries_with_software_encoder(monkeypatch) -> None:
+    from dripcut.engines.ffmpeg import runner as runner_mod
+
+    calls: list[list[str]] = []
+
+    class FakeProcess:
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("Unknown encoder 'h264_videotoolbox'\n")
+
+        def poll(self) -> int:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    def fake_popen(command, **kwargs):
+        calls.append(list(command))
+        return FakeProcess(1 if len(calls) == 1 else 0)
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(FFmpegRunner, "resolve_binary", lambda self: "ffmpeg")
+    monkeypatch.setattr(FFmpegRunner, "_pump_progress", lambda *args, **kwargs: False)
+
+    runner = FFmpegRunner("ffmpeg", hardware_accel=True)
+    result = runner.run(
+        [
+            "-i",
+            "input.mp4",
+            "-c:v",
+            "h264_videotoolbox",
+            "-q:v",
+            "62",
+            "-allow_sw",
+            "1",
+            "-c:a",
+            "aac",
+            "output.mp4",
+        ]
+    )
+
+    assert result.returncode == 0
+    assert len(calls) == 2
+    assert "h264_videotoolbox" in calls[0]
+    assert "libx264" in calls[1]
+    assert "-q:v" not in calls[1]
+    assert "-allow_sw" not in calls[1]
+
+
+def test_runner_retries_nvenc_with_software_encoder(monkeypatch) -> None:
+    from dripcut.engines.ffmpeg import runner as runner_mod
+
+    calls: list[list[str]] = []
+
+    class FakeProcess:
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("Error initializing output stream with h264_nvenc\n")
+
+        def poll(self) -> int:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    def fake_popen(command, **kwargs):
+        calls.append(list(command))
+        return FakeProcess(1 if len(calls) == 1 else 0)
+
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(FFmpegRunner, "resolve_binary", lambda self: "ffmpeg")
+    monkeypatch.setattr(FFmpegRunner, "_pump_progress", lambda *args, **kwargs: False)
+
+    runner = FFmpegRunner("ffmpeg", hardware_accel=True)
+    result = runner.run(
+        [
+            "-i",
+            "input.mp4",
+            "-c:v",
+            "h264_nvenc",
+            "-cq:v",
+            "23",
+            "-preset",
+            "p4",
+            "-c:a",
+            "aac",
+            "output.mp4",
+        ]
+    )
+
+    assert result.returncode == 0
+    assert len(calls) == 2
+    assert "h264_nvenc" in calls[0]
+    assert "libx264" in calls[1]
+    assert "-cq:v" not in calls[1]
+    assert "p4" not in calls[1]
 
 
 @needs_ffmpeg

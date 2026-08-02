@@ -610,6 +610,7 @@
   /* -------------------------------------------------------------- lifecycle */
 
   function boot() {
+    document.body.classList.add("dripcut");
     installResizer();
     buildPalette();
   }

@@ -27,11 +27,11 @@ class SubtitlesPage(Page):
     """Generate, style, preview and apply captions."""
 
     key = "subtitles"
-    label = "Subtitle Studio"
+    label = "Captions"
     icon = "\u2263"
-    group = "Workspace"
-    title = "Subtitle Studio"
-    subtitle = "Six presets, four formats, and a burn-in that matches the preview."
+    group = "Create"
+    title = "Captions"
+    subtitle = "Add readable captions that fit the video format, including vertical clips."
 
     def __init__(self) -> None:
         self._ctx: PageContext | None = None
@@ -95,7 +95,7 @@ class SubtitlesPage(Page):
                         elem_classes=["dc-btn", "dc-btn-primary"],
                         elem_id="dc-subs-write",
                     )
-                    written_files = gr.Files(label="Subtitle file", visible=False)
+                    written_files = gr.Files(label="Subtitle file", file_count="multiple", visible=False)
 
                 with gr.Tab("Burn into the picture"):
                     burn_quality = gr.Dropdown(
@@ -117,7 +117,7 @@ class SubtitlesPage(Page):
                             "Stop", elem_classes=["dc-btn", "dc-btn-danger"],
                             elem_id="dc-subs-stop",
                         )
-                    burned = gr.Files(label="Burned video", visible=False)
+                    burned = gr.Files(label="Burned video", file_count="multiple", visible=False)
 
                 with gr.Tab("Attach as a track"):
                     language = gr.Textbox(value="eng", label="Language tag")
@@ -131,7 +131,7 @@ class SubtitlesPage(Page):
                         elem_classes=["dc-btn", "dc-btn-primary"],
                         elem_id="dc-subs-attach",
                     )
-                    attached = gr.Files(label="Video with a subtitle track", visible=False)
+                    attached = gr.Files(label="Video with a subtitle track", file_count="multiple", visible=False)
 
             # --------------------------------------------------------- wiring
             source.change(self._load, inputs=source, outputs=[media_state, info, message])
