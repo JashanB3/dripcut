@@ -28,6 +28,7 @@ from dripcut.services.export_service import ExportService
 from dripcut.services.media_service import MediaService
 from dripcut.services.notification_service import NotificationService
 from dripcut.services.project_service import ProjectService
+from dripcut.services.social_service import SocialScheduleService
 from dripcut.services.split_service import SplitService
 from dripcut.services.subtitle_service import SubtitleService
 from dripcut.services.youtube_service import YouTubeService
@@ -116,6 +117,7 @@ def build_container(
     ai_service = AIService(transcription, analysis, llm, events, resolved_settings, resolved_paths)
     media_service = MediaService(probe, video_engine, events, resolved_settings, resolved_paths)
     youtube_service = YouTubeService(resolved_paths)
+    social_service = SocialScheduleService(resolved_paths)
     project_service = ProjectService(resolved_paths, events)
     split_service = SplitService(
         split_registry, video_engine, runner, events, resolved_settings, ai_service
@@ -127,6 +129,7 @@ def build_container(
     container.register_instance(container.KEY_AI, ai_service)
     container.register_instance(container.KEY_MEDIA, media_service)
     container.register_instance(container.KEY_YOUTUBE, youtube_service)
+    container.register_instance(container.KEY_SOCIAL, social_service)
     container.register_instance(container.KEY_PROJECTS, project_service)
     container.register_instance(container.KEY_SPLIT, split_service)
     container.register_instance(container.KEY_SUBTITLES, subtitle_service)

@@ -67,6 +67,11 @@ class PageContext:
         return self.container.youtube
 
     @property
+    def social(self) -> Any:
+        """Social scheduling and account readiness."""
+        return self.container.social
+
+    @property
     def split(self) -> Any:
         """Split planning and rendering."""
         return self.container.split

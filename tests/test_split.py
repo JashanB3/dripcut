@@ -148,11 +148,7 @@ def test_service_renders_real_clips(container, media, tmp_path) -> None:
 
 
 @needs_ffmpeg
-def test_service_renders_bundle_with_output_format(container, media, tmp_path, monkeypatch) -> None:
-    def fail_transform(*_args, **_kwargs) -> None:
-        raise AssertionError("Landscape renders should keep the direct trim path.")
-
-    monkeypatch.setattr(container.split.video, "transform", fail_transform)
+def test_service_renders_bundle_with_output_format(container, media, tmp_path) -> None:
     plan = container.split.plan(media, SplitMode.FIXED, {"clip_length": 2.0})
     outputs, archive = container.split.render_bundle(
         plan,
@@ -162,6 +158,10 @@ def test_service_renders_bundle_with_output_format(container, media, tmp_path, m
         output_format="landscape",
     )
     assert outputs and all(path.exists() and path.stat().st_size > 0 for path in outputs)
+    assert all(
+        container.media.import_file(path).video.display_resolution == (1920, 1080)
+        for path in outputs
+    )
     assert archive.exists() and archive.stat().st_size > 0
 
 

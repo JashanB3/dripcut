@@ -41,6 +41,7 @@ class DashboardPage(Page):
         ("workspace", "\u25a3", "Edit tools", "Trim, crop, convert, watermark"),
         ("batch", "\u2637", "Bulk edit", "Run one action across a folder"),
         ("exports", "\u2913", "Downloads", "Everything rendered, ready to grab"),
+        ("social", "\u25ce", "Schedule", "Plan Reels and Shorts"),
     )
 
     def build(self, ctx: PageContext, *, visible: bool) -> gr.Column:

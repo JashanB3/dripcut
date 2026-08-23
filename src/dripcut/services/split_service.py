@@ -146,8 +146,13 @@ class SplitService:
         target_size = {
             "square": (1080, 1080),
             "portrait": (1080, 1920),
+            "landscape": (1920, 1080),
         }.get(profile, (1920, 1080))
-        should_reframe = resize is not None or profile in {"portrait", "square"}
+        should_reframe = resize is not None or profile in {
+            "portrait",
+            "square",
+            "landscape",
+        }
 
         for position, segment in enumerate(plan.segments, start=1):
             if cancel_token is not None:

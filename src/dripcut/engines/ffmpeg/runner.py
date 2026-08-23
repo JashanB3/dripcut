@@ -86,6 +86,10 @@ class FFmpegRunner:
             )
         return found
 
+    def available(self) -> bool:
+        """True when FFmpeg can be resolved on the current host."""
+        return shutil.which(self.ffmpeg_path) is not None
+
     def version(self) -> str:
         """First line of ``ffmpeg -version``, or an empty string when unavailable."""
         try:

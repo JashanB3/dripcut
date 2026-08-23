@@ -236,11 +236,11 @@ def _topbar_search() -> str:
 
 
 def _topbar_account() -> str:
-    """Account chip. Local-only, so it names the machine rather than a login."""
+    """Account chip in the editor header."""
     return (
         '<div class="dc-topbar-account">'
-        '<span class="dc-topbar-plan">Local</span>'
-        '<span class="dc-avatar" aria-hidden="true">A</span>'
+        '<span class="dc-topbar-plan">Studio</span>'
+        '<span class="dc-avatar" aria-hidden="true">D</span>'
         "</div>"
     )
 

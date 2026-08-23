@@ -195,6 +195,8 @@ class JobQueue:
             job.status = JobStatus.FAILED
             job.error = exc.message
             job.hint = exc.hint
+            if error_code := getattr(exc, "code", None):
+                job.metadata["error_code"] = str(error_code)
             job.stage = "Failed"
             self.events.publish(
                 EventName.JOB_FAILED, job_id=job.id, title=job.title, error=exc.message, hint=exc.hint

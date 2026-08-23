@@ -5296,3 +5296,707 @@ body,
     min-width: 44px !important;
   }
 }
+
+/* ==========================================================================
+   17. Fabric editor skin
+   --------------------------------------------------------------------------
+   Inspired by the MIT licensed fabric-canvas-editor reference:
+   compact icon rail, command-first toolbar, canvas-like page surface and
+   inspector-style panels. This layer intentionally comes last so it resolves
+   the older DripCut/Canva experiments above without touching page logic.
+   ========================================================================== */
+
+.dripcut {
+  --dc-editor-rail: 132px;
+  --dc-editor-toolbar: 72px;
+  --dc-editor-bg: #f6f8fc;
+  --dc-editor-paper: #ffffff;
+  --dc-editor-panel: #ffffff;
+  --dc-editor-border: #e6e9f0;
+  --dc-editor-text: #101828;
+  --dc-editor-muted: #667085;
+  --dc-editor-purple: #7c3aed;
+  --dc-editor-blue: #0ea5e9;
+  --dc-editor-green: #10b981;
+  --dc-editor-orange: #f59e0b;
+  --dc-editor-shadow: 0 18px 45px rgba(16, 24, 40, 0.10);
+  color: var(--dc-editor-text);
+  background: var(--dc-editor-bg);
+}
+
+.dripcut[data-theme='dark'] {
+  --dc-editor-bg: #0b1020;
+  --dc-editor-paper: #111827;
+  --dc-editor-panel: #151d2f;
+  --dc-editor-border: #25324a;
+  --dc-editor-text: #f8fafc;
+  --dc-editor-muted: #a6b0c3;
+  --dc-editor-shadow: 0 22px 60px rgba(0, 0, 0, 0.42);
+}
+
+.dripcut .dc-shell {
+  min-height: 100vh !important;
+  display: grid !important;
+  grid-template-columns: var(--dc-editor-rail) minmax(0, 1fr) !important;
+  align-items: stretch !important;
+  gap: 0 !important;
+  background:
+    linear-gradient(180deg, rgba(124, 58, 237, 0.05), transparent 26rem),
+    var(--dc-editor-bg) !important;
+  overflow: hidden !important;
+}
+
+.dripcut .dc-shell::before,
+.dripcut .dc-shell::after {
+  display: none !important;
+}
+
+.dripcut .dc-shell > .dc-sidebar {
+  position: sticky !important;
+  top: 0 !important;
+  align-self: start !important;
+  flex: none !important;
+  width: var(--dc-editor-rail) !important;
+  min-width: var(--dc-editor-rail) !important;
+  max-width: var(--dc-editor-rail) !important;
+  height: 100vh !important;
+  padding: 14px 10px !important;
+  border-right: 1px solid var(--dc-editor-border) !important;
+  background: color-mix(in srgb, var(--dc-editor-paper) 92%, transparent) !important;
+  backdrop-filter: blur(18px);
+  box-shadow: 10px 0 30px rgba(16, 24, 40, 0.04);
+  overflow-y: auto !important;
+}
+
+.dripcut .dc-brand {
+  display: grid !important;
+  justify-items: center !important;
+  gap: 6px !important;
+  padding: 2px 0 18px !important;
+}
+
+.dripcut .dc-brand-mark {
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 14px !important;
+  background: var(--dc-logo, var(--dc-brand-gradient)) center/cover no-repeat !important;
+  box-shadow: 0 12px 28px rgba(124, 58, 237, 0.26) !important;
+}
+
+.dripcut .dc-brand-mark::after {
+  display: none !important;
+}
+
+.dripcut .dc-brand-text {
+  max-width: 64px;
+  overflow: hidden;
+  color: var(--dc-editor-text);
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.dripcut button.dc-nav-item {
+  width: 104px !important;
+  height: 64px !important;
+  min-height: 64px !important;
+  display: grid !important;
+  place-items: center !important;
+  gap: 3px !important;
+  margin: 4px 0 !important;
+  padding: 7px 5px !important;
+  border-radius: 18px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: var(--dc-editor-muted) !important;
+  font-size: 11px !important;
+  font-weight: 760 !important;
+  line-height: 1.1 !important;
+  box-shadow: none !important;
+}
+
+.dripcut button.dc-nav-item::first-line {
+  font-size: inherit !important;
+  line-height: inherit !important;
+}
+
+.dripcut button.dc-nav-item span,
+.dripcut button.dc-nav-item .wrap {
+  white-space: normal !important;
+}
+
+.dripcut button.dc-nav-item:hover {
+  background: color-mix(in srgb, var(--dc-editor-purple) 10%, transparent) !important;
+  color: var(--dc-editor-purple) !important;
+  transform: translateY(-1px);
+}
+
+.dripcut button.dc-nav-item.dc-active {
+  background: linear-gradient(135deg, var(--dc-editor-purple), var(--dc-editor-blue)) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+  box-shadow: 0 14px 30px rgba(124, 58, 237, 0.26) !important;
+}
+
+.dripcut button.dc-nav-sub {
+  opacity: 0.92;
+}
+
+.dripcut button.dc-nav-toggle {
+  height: 40px !important;
+  min-height: 40px !important;
+  margin-top: 12px !important;
+  background: color-mix(in srgb, var(--dc-editor-border) 42%, transparent) !important;
+}
+
+.dripcut button.dc-nav-toggle::after,
+.dripcut .dc-nav-panel::before,
+.dripcut .dc-nav-group {
+  display: none !important;
+}
+
+.dripcut .dc-nav-panel {
+  display: contents !important;
+}
+
+.dripcut .dc-nav-rule {
+  width: 42px !important;
+  height: 1px !important;
+  margin: 14px auto !important;
+  background: var(--dc-editor-border) !important;
+}
+
+.dripcut .dc-shell > .dc-main,
+.dripcut .dc-main {
+  min-width: 0 !important;
+  width: auto !important;
+  padding: 0 32px 80px !important;
+  background: var(--dc-editor-bg) !important;
+  overflow-x: hidden !important;
+}
+
+.dripcut .dc-topbar {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 30 !important;
+  min-height: var(--dc-editor-toolbar) !important;
+  margin: 0 -32px 24px !important;
+  padding: 12px 32px !important;
+  display: grid !important;
+  grid-template-columns: minmax(220px, 1fr) auto !important;
+  align-items: center !important;
+  gap: 20px !important;
+  border-bottom: 1px solid var(--dc-editor-border) !important;
+  background: color-mix(in srgb, var(--dc-editor-paper) 88%, transparent) !important;
+  backdrop-filter: blur(18px);
+}
+
+.dripcut .dc-topbar .dc-page-head {
+  margin: 0 !important;
+}
+
+.dripcut .dc-topbar .dc-display {
+  font-size: 21px !important;
+  font-weight: 760 !important;
+  letter-spacing: 0 !important;
+}
+
+.dripcut .dc-topbar .dc-sub,
+.dripcut .dc-topbar .dc-eyebrow {
+  display: none !important;
+}
+
+.dripcut .dc-topbar-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 10px !important;
+  min-width: 0 !important;
+}
+
+.dripcut .dc-topbar-actions > .block:first-child {
+  flex: 0 1 320px !important;
+  width: min(320px, 36vw) !important;
+  min-width: 180px !important;
+}
+
+.dripcut .dc-topbar-actions > .block:last-child {
+  flex: 0 0 auto !important;
+}
+
+.dripcut .dc-topbar-search {
+  height: 42px !important;
+  width: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 0 12px !important;
+  border: 1px solid var(--dc-editor-border) !important;
+  border-radius: 999px !important;
+  background: var(--dc-editor-panel) !important;
+  color: var(--dc-editor-muted) !important;
+  box-shadow: none !important;
+}
+
+.dripcut .dc-topbar-account {
+  height: 42px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 4px 5px 4px 12px !important;
+  border: 1px solid var(--dc-editor-border);
+  border-radius: 999px;
+  background: var(--dc-editor-panel);
+}
+
+.dripcut .dc-topbar-plan {
+  color: var(--dc-editor-purple) !important;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.dripcut .dc-avatar {
+  width: 32px !important;
+  height: 32px !important;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--dc-editor-purple), var(--dc-editor-blue));
+  color: #fff;
+  font-weight: 800;
+}
+
+.dripcut .dc-page {
+  max-width: 1440px !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+}
+
+.dripcut .dc-card,
+.dripcut .dc-side-card,
+.dripcut .dc-file-panel,
+.dripcut .dc-home-split > *,
+.dripcut .dc-page .gr-group,
+.dripcut .dc-page .gr-box {
+  border: 1px solid var(--dc-editor-border) !important;
+  border-radius: 14px !important;
+  background: var(--dc-editor-panel) !important;
+  box-shadow: none !important;
+}
+
+.dripcut .dc-studio,
+.dripcut .dc-home-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--dc-editor-border) !important;
+  border-radius: 28px !important;
+  background:
+    radial-gradient(740px 320px at 10% 0%, rgba(124, 58, 237, 0.18), transparent 62%),
+    radial-gradient(680px 320px at 92% 8%, rgba(14, 165, 233, 0.18), transparent 60%),
+    var(--dc-editor-paper) !important;
+  box-shadow: var(--dc-editor-shadow) !important;
+}
+
+.dripcut .dc-studio h1,
+.dripcut .dc-home-hero h1 {
+  color: var(--dc-editor-text) !important;
+  letter-spacing: 0 !important;
+}
+
+.dripcut .dc-studio-greeting,
+.dripcut .dc-studio p,
+.dripcut .dc-studio-signals,
+.dripcut .dc-signal {
+  color: var(--dc-editor-muted) !important;
+}
+
+.dripcut .dc-tool-deck,
+.dripcut .dc-tools {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) !important;
+  gap: 14px !important;
+}
+
+.dripcut .dc-tool-card {
+  min-height: 92px !important;
+  padding: 14px !important;
+  border: 1px solid var(--dc-editor-border) !important;
+  border-radius: 16px !important;
+  background: var(--dc-editor-panel) !important;
+  color: var(--dc-editor-text) !important;
+  box-shadow: none !important;
+}
+
+.dripcut .dc-tool-chip,
+.dripcut .dc-tool i {
+  border-radius: 16px !important;
+}
+
+.dripcut .dc-section-title,
+.dripcut .dc-title {
+  color: var(--dc-editor-text) !important;
+  font-size: 18px !important;
+  font-weight: 760 !important;
+  letter-spacing: 0 !important;
+}
+
+.dripcut .dc-sub,
+.dripcut .dc-project-meta,
+.dripcut .dc-note-detail {
+  color: var(--dc-editor-muted) !important;
+}
+
+.dripcut .dc-page button.primary,
+.dripcut .dc-page button.dc-btn-primary,
+.dripcut .dc-studio-primary {
+  min-height: 44px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: linear-gradient(135deg, var(--dc-editor-purple), var(--dc-editor-blue)) !important;
+  color: #fff !important;
+  font-weight: 800 !important;
+  box-shadow: 0 14px 28px rgba(124, 58, 237, 0.24) !important;
+}
+
+.dripcut .dc-page button.secondary,
+.dripcut .dc-page button.dc-btn-quiet,
+.dripcut .dc-studio-secondary {
+  min-height: 42px !important;
+  border: 1px solid var(--dc-editor-border) !important;
+  border-radius: 12px !important;
+  background: var(--dc-editor-panel) !important;
+  color: var(--dc-editor-text) !important;
+  font-weight: 740 !important;
+  box-shadow: none !important;
+}
+
+.dripcut .dc-page input,
+.dripcut .dc-page textarea,
+.dripcut .dc-page select {
+  min-height: 44px !important;
+  border: 1px solid var(--dc-editor-border) !important;
+  border-radius: 12px !important;
+  background: var(--dc-editor-panel) !important;
+  color: var(--dc-editor-text) !important;
+  box-shadow: none !important;
+}
+
+.dripcut .dc-page input:focus,
+.dripcut .dc-page textarea:focus,
+.dripcut .dc-page select:focus {
+  border-color: var(--dc-editor-purple) !important;
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.14) !important;
+}
+
+.dripcut .dc-page .wrap:has(input[type="range"]) {
+  padding: 14px !important;
+  border: 1px solid var(--dc-editor-border) !important;
+  border-radius: 14px !important;
+  background: var(--dc-editor-panel) !important;
+}
+
+.dripcut .dc-page .wrap:has(input[type="range"]) input[type="number"] {
+  max-width: 88px !important;
+}
+
+.dripcut .dc-strip,
+.dripcut .dc-table,
+.dripcut .dc-empty {
+  border-color: var(--dc-editor-border) !important;
+  background: var(--dc-editor-panel) !important;
+}
+
+.dripcut .dc-statusbar {
+  height: 32px !important;
+  border-top: 1px solid var(--dc-editor-border) !important;
+  background: color-mix(in srgb, var(--dc-editor-paper) 90%, transparent) !important;
+  color: var(--dc-editor-muted) !important;
+  backdrop-filter: blur(14px);
+}
+
+@media (max-width: 980px) {
+  .dripcut {
+    --dc-editor-rail: 104px;
+  }
+
+  .dripcut .dc-shell {
+    grid-template-columns: var(--dc-editor-rail) minmax(0, 1fr) !important;
+  }
+
+  .dripcut .dc-shell > .dc-sidebar {
+    width: var(--dc-editor-rail) !important;
+    min-width: var(--dc-editor-rail) !important;
+    max-width: var(--dc-editor-rail) !important;
+    padding-inline: 6px !important;
+  }
+
+  .dripcut button.dc-nav-item {
+    width: 84px !important;
+  }
+
+  .dripcut .dc-main {
+    padding: 0 18px 74px !important;
+  }
+
+  .dripcut .dc-topbar {
+    margin-inline: -18px !important;
+    padding-inline: 18px !important;
+    grid-template-columns: 1fr auto !important;
+  }
+
+  .dripcut .dc-topbar-actions > .block:first-child {
+    display: none !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .dripcut .dc-shell {
+    display: block !important;
+  }
+
+  .dripcut .dc-shell > .dc-sidebar {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 50 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    height: auto !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--dc-editor-border) !important;
+  }
+
+  .dripcut .dc-brand {
+    flex: 0 0 auto !important;
+    padding: 0 8px 0 0 !important;
+  }
+
+  .dripcut .dc-brand-text {
+    display: none !important;
+  }
+
+  .dripcut .dc-nav-panel {
+    display: flex !important;
+    gap: 8px !important;
+  }
+
+  .dripcut .dc-nav-rule,
+  .dripcut button.dc-nav-toggle {
+    display: none !important;
+  }
+
+  .dripcut .dc-topbar {
+    position: static !important;
+  }
+}
+
+/* 17.1 Final rail clamp ----------------------------------------------------
+   Gradio columns ship an inline min-width and earlier DripCut skins used
+   multiple max-width rules. Clamp the actual sidebar column after every skin. */
+.dripcut .row.dc-shell > .column.dc-sidebar,
+.gradio-container .dripcut .row.dc-shell > .column.dc-sidebar {
+  flex: 0 0 var(--dc-editor-rail) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  width: var(--dc-editor-rail) !important;
+  min-width: var(--dc-editor-rail) !important;
+  max-width: var(--dc-editor-rail) !important;
+}
+
+.dripcut .row.dc-shell > .column.dc-main,
+.gradio-container .dripcut .row.dc-shell > .column.dc-main {
+  flex: 1 1 calc(100% - var(--dc-editor-rail)) !important;
+  width: calc(100% - var(--dc-editor-rail)) !important;
+  min-width: 0 !important;
+}
+
+@media (max-width: 720px) {
+  .dripcut .row.dc-shell > .column.dc-sidebar,
+  .gradio-container .dripcut .row.dc-shell > .column.dc-sidebar,
+  .dripcut .row.dc-shell > .column.dc-main,
+  .gradio-container .dripcut .row.dc-shell > .column.dc-main {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    flex-basis: auto !important;
+  }
+}
+
+/* 17.2 Pro form reset ------------------------------------------------------
+   Gradio slider internals include absolutely-sized helper wrappers. Earlier
+   skins made those wrappers transparent but did not reset their layout, which
+   caused labels, reset buttons and numeric inputs to overlap on Make Clips and
+   AI Clips. This section is intentionally last so it wins the specificity fight. */
+.dripcut .dc-page .gradio-row {
+  align-items: start !important;
+  gap: 18px !important;
+}
+
+.dripcut .dc-workspace-grid,
+.dripcut .dc-social-grid {
+  display: grid !important;
+  grid-template-columns: minmax(340px, 0.92fr) minmax(420px, 1.08fr) !important;
+  gap: 34px !important;
+  align-items: start !important;
+}
+
+.dripcut .dc-workspace-grid > .column,
+.dripcut .dc-social-grid > .column {
+  min-width: 0 !important;
+}
+
+.dripcut .dc-page .gr-group,
+.dripcut .dc-page .gr-box,
+.dripcut .dc-page .block {
+  overflow: visible !important;
+}
+
+.dripcut .dc-page label,
+.dripcut .dc-page .block-title,
+.dripcut .dc-page .head label,
+.dripcut .dc-page .prose label {
+  color: var(--dc-editor-text) !important;
+  font-weight: 760 !important;
+  line-height: 1.2 !important;
+}
+
+.dripcut .dc-page .wrap,
+.dripcut .dc-page .wrap-inner,
+.dripcut .dc-page .secondary-wrap,
+.dripcut .dc-page .tab-like-container {
+  position: static !important;
+  min-width: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.dripcut .dc-page .wrap:has(input[type="range"]) {
+  position: relative !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  grid-template-areas:
+    "label value"
+    "slider slider"
+    "limits limits" !important;
+  gap: 10px 14px !important;
+  min-height: 92px !important;
+  padding: 14px 16px !important;
+  overflow: visible !important;
+  border: 1px solid var(--dc-editor-border) !important;
+  border-radius: 18px !important;
+  background: var(--dc-editor-panel) !important;
+}
+
+.dripcut .dc-page .wrap:has(input[type="range"]) .head {
+  position: static !important;
+  display: contents !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+}
+
+.dripcut .dc-page .wrap:has(input[type="range"]) .head > label,
+.dripcut .dc-page .wrap:has(input[type="range"]) .block-title {
+  grid-area: label !important;
+  align-self: center !important;
+  margin: 0 !important;
+  white-space: normal !important;
+}
+
+.dripcut .dc-page .wrap:has(input[type="range"]) .slider_input_container {
+  grid-area: slider !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 8px !important;
+  align-items: center !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+}
+
+.dripcut .dc-page .wrap:has(input[type="range"]) input[type="range"] {
+  width: 100% !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  accent-color: var(--dc-editor-purple) !important;
+}
+
+.dripcut .dc-page .wrap:has(input[type="range"]) input[type="number"] {
+  grid-area: value !important;
+  position: static !important;
+  width: 82px !important;
+  min-width: 82px !important;
+  height: 42px !important;
+  padding: 0 12px !important;
+  text-align: center !important;
+  border-radius: 14px !important;
+  background: var(--dc-editor-paper) !important;
+}
+
+.dripcut .dc-page .wrap:has(input[type="range"]) .reset-button {
+  position: absolute !important;
+  top: 17px !important;
+  right: 12px !important;
+  width: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  opacity: 0.5 !important;
+}
+
+.dripcut .dc-page .wrap:has(input[type="range"]) .min,
+.dripcut .dc-page .wrap:has(input[type="range"]) .max {
+  color: var(--dc-editor-muted) !important;
+  font-size: 12px !important;
+}
+
+.dripcut .dc-page .dc-render-options,
+.dripcut .dc-page .dc-social-options {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 16px !important;
+}
+
+.dripcut .dc-page .dc-source-tabs {
+  border: 1px solid var(--dc-editor-border) !important;
+  border-radius: 22px !important;
+  background: var(--dc-editor-panel) !important;
+  overflow: hidden !important;
+}
+
+.dripcut .dc-page .dc-dropzone {
+  min-height: 170px !important;
+  display: grid !important;
+  place-items: center !important;
+  border: 1px dashed color-mix(in srgb, var(--dc-editor-purple) 45%, var(--dc-editor-border)) !important;
+  border-radius: 20px !important;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(124, 58, 237, 0.12), transparent 45%),
+    var(--dc-editor-panel) !important;
+}
+
+.dripcut .dc-page button {
+  white-space: nowrap !important;
+}
+
+.dripcut .dc-social-page .dc-card {
+  margin-bottom: 16px !important;
+}
+
+@media (max-width: 1180px) {
+  .dripcut .dc-workspace-grid,
+  .dripcut .dc-social-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .dripcut .dc-page .dc-render-options,
+  .dripcut .dc-page .dc-social-options {
+    grid-template-columns: 1fr !important;
+  }
+}

@@ -118,6 +118,7 @@ class ServiceContainer(Container):
     KEY_PROJECTS = "projects"
     KEY_MEDIA = "media"
     KEY_YOUTUBE = "youtube"
+    KEY_SOCIAL = "social"
     KEY_NOTIFICATIONS = "notifications"
     KEY_PLUGINS = "plugins"
 
@@ -145,6 +146,11 @@ class ServiceContainer(Container):
     def youtube(self) -> Any:
         """YouTube import service."""
         return self.resolve(self.KEY_YOUTUBE)
+
+    @property
+    def social(self) -> Any:
+        """Social account connection and scheduling service."""
+        return self.resolve(self.KEY_SOCIAL)
 
     @property
     def video(self) -> Any:

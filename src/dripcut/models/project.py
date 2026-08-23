@@ -15,7 +15,7 @@ from dripcut.utils.timecode import format_clock
 
 __all__ = ["Project", "ProjectSummary"]
 
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 
 
 @dataclass(slots=True)
@@ -41,6 +41,19 @@ class Project:
     outputs: list[Path] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     notes: str = ""
+    user_id: str = "local"
+    project_type: str = "auto_clip"
+    source_asset_id: str | None = None
+    status: str = "draft"
+    platform: str = "both"
+    output_format: str = "portrait"
+    artifact_ids: list[str] = field(default_factory=list)
+    scheduling_status: str = "not_scheduled"
+    latest_job_id: str | None = None
+    captions_enabled: bool = False
+    content_rights_confirmed: bool = False
+    content_rights_confirmed_at: float | None = None
+    content_rights_source: str | None = None
     version: int = MANIFEST_VERSION
 
     @property
@@ -89,6 +102,19 @@ class Project:
             "outputs": [str(p) for p in self.outputs],
             "tags": list(self.tags),
             "notes": self.notes,
+            "user_id": self.user_id,
+            "project_type": self.project_type,
+            "source_asset_id": self.source_asset_id,
+            "status": self.status,
+            "platform": self.platform,
+            "output_format": self.output_format,
+            "artifact_ids": list(self.artifact_ids),
+            "scheduling_status": self.scheduling_status,
+            "latest_job_id": self.latest_job_id,
+            "captions_enabled": self.captions_enabled,
+            "content_rights_confirmed": self.content_rights_confirmed,
+            "content_rights_confirmed_at": self.content_rights_confirmed_at,
+            "content_rights_source": self.content_rights_source,
         }
 
     @classmethod
@@ -109,6 +135,27 @@ class Project:
             outputs=[Path(p) for p in data.get("outputs", [])],
             tags=list(data.get("tags", [])),
             notes=str(data.get("notes", "")),
+            user_id=str(data.get("user_id", "local")),
+            project_type=str(data.get("project_type", "auto_clip")),
+            source_asset_id=str(data["source_asset_id"]) if data.get("source_asset_id") else None,
+            status=str(data.get("status", "draft")),
+            platform=str(data.get("platform", "both")),
+            output_format=str(data.get("output_format", "portrait")),
+            artifact_ids=[str(item) for item in data.get("artifact_ids", [])],
+            scheduling_status=str(data.get("scheduling_status", "not_scheduled")),
+            latest_job_id=str(data["latest_job_id"]) if data.get("latest_job_id") else None,
+            captions_enabled=bool(data.get("captions_enabled", False)),
+            content_rights_confirmed=bool(data.get("content_rights_confirmed", False)),
+            content_rights_confirmed_at=(
+                float(data["content_rights_confirmed_at"])
+                if data.get("content_rights_confirmed_at") is not None
+                else None
+            ),
+            content_rights_source=(
+                str(data["content_rights_source"])
+                if data.get("content_rights_source")
+                else None
+            ),
             version=int(data.get("version", MANIFEST_VERSION)),
         )
 
@@ -117,6 +164,7 @@ class Project:
         return ProjectSummary(
             id=self.id,
             name=self.name,
+            created_at=self.created_at,
             source_name=self.source_name,
             duration=self.duration,
             clip_count=self.clip_count,
@@ -124,6 +172,15 @@ class Project:
             thumbnail=self.thumbnail,
             has_transcript=self.has_transcript,
             tags=tuple(self.tags),
+            project_type=self.project_type,
+            source_asset_id=self.source_asset_id,
+            status=self.status,
+            platform=self.platform,
+            output_format=self.output_format,
+            artifact_ids=tuple(self.artifact_ids),
+            scheduling_status=self.scheduling_status,
+            latest_job_id=self.latest_job_id,
+            captions_enabled=self.captions_enabled,
         )
 
 
@@ -133,6 +190,7 @@ class ProjectSummary:
 
     id: str
     name: str
+    created_at: float
     source_name: str
     duration: float
     clip_count: int
@@ -140,6 +198,15 @@ class ProjectSummary:
     thumbnail: Path | None = None
     has_transcript: bool = False
     tags: tuple[str, ...] = ()
+    project_type: str = "auto_clip"
+    source_asset_id: str | None = None
+    status: str = "draft"
+    platform: str = "both"
+    output_format: str = "portrait"
+    artifact_ids: tuple[str, ...] = ()
+    scheduling_status: str = "not_scheduled"
+    latest_job_id: str | None = None
+    captions_enabled: bool = False
 
     @property
     def duration_label(self) -> str:

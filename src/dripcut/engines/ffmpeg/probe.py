@@ -82,6 +82,39 @@ class MediaProbe:
         """Forget every cached probe (used after a destructive in-place edit)."""
         self._cache.clear()
 
+    def keyframe_times(self, path: str | Path) -> tuple[float, ...]:
+        """Return video keyframe timestamps used to decide whether fast cuts are safe."""
+        media_path = Path(path).expanduser()
+        command = [
+            self.resolve_binary(),
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-skip_frame",
+            "nokey",
+            "-show_entries",
+            "frame=best_effort_timestamp_time",
+            "-of",
+            "csv=p=0",
+            str(media_path),
+        ]
+        try:
+            proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
+                command, capture_output=True, text=True, timeout=120, check=False
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            _log.debug("could not inspect keyframes for %s", media_path.name, exc_info=True)
+            return ()
+        if proc.returncode != 0:
+            return ()
+        values: list[float] = []
+        for line in proc.stdout.splitlines():
+            value = _to_float(line.strip().split(",", maxsplit=1)[0])
+            if value >= 0:
+                values.append(value)
+        return tuple(values)
+
     # ----------------------------------------------------------------- internals
 
     def _run(self, path: Path) -> dict[str, Any]:

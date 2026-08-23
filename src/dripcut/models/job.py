@@ -45,6 +45,7 @@ class JobKind(StrEnum):
     """What a job does - drives grouping and the icon in the queue."""
 
     TRIM = "trim"
+    DOWNLOAD = "download"
     SPLIT = "split"
     MERGE = "merge"
     CONVERT = "convert"

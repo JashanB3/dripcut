@@ -1,0 +1,715 @@
+"""Application service that connects HTTP requests to DripCut's media pipeline."""
+
+from __future__ import annotations
+
+import json
+import mimetypes
+import re
+import shutil
+import time
+from collections.abc import Sequence
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any, BinaryIO, Literal, cast
+
+from dripcut.api.contracts import (
+    AIEditActionResponse,
+    AIEditPlanRequest,
+    AIEditPlanResponse,
+    ArtifactResponse,
+    ClipSegmentRequest,
+    JobResponse,
+    ProjectDetailResponse,
+    ProjectResponse,
+    RenderRequest,
+    ScheduleCreateRequest,
+    ScheduledPostResponse,
+    ScheduleResponse,
+    SocialConnectionResponse,
+    SourceAssetResponse,
+    StandardPlanRequest,
+    StandardPlanResponse,
+    ThumbnailRequest,
+)
+from dripcut.api.stores import (
+    ArtifactRecord,
+    ArtifactStore,
+    JobStore,
+    SourceAssetRecord,
+    SourceAssetStore,
+)
+from dripcut.core.container import ServiceContainer
+from dripcut.core.errors import ValidationError
+from dripcut.models.clip import Segment, SegmentSource, SplitMode, SplitPlan
+from dripcut.models.job import Job, JobKind, JobResult
+from dripcut.models.project import Project, ProjectSummary
+
+
+class WebClipService:
+    """Orchestrate imports, validated segment plans and background renders."""
+
+    def __init__(
+        self,
+        container: ServiceContainer,
+        sources: SourceAssetStore,
+        artifacts: ArtifactStore,
+        jobs: JobStore,
+    ) -> None:
+        self.container = container
+        self.sources = sources
+        self.artifacts = artifacts
+        self.jobs = jobs
+
+    def import_upload(self, file_name: str, stream: BinaryIO) -> SourceAssetResponse:
+        record = self.sources.save_upload(file_name, stream)
+        return self._finish_source(record, project_type="auto_clip")
+
+    def import_youtube(
+        self, url: str, *, rights_confirmed: bool = False
+    ) -> SourceAssetResponse:
+        value = self._require_youtube_permission(url, rights_confirmed)
+        project = self._start_youtube_project(value)
+        try:
+            result = self.container.youtube.import_video(value)
+            return self._register_youtube_result(result, value, project=project)
+        except Exception:
+            project.status = "failed"
+            self.container.projects.save(project)
+            raise
+
+    def create_youtube_import(self, url: str, *, rights_confirmed: bool = False) -> JobResponse:
+        value = self._require_youtube_permission(url, rights_confirmed)
+        project = self._start_youtube_project(value)
+        job = Job(
+            kind=cast(JobKind, JobKind.DOWNLOAD),
+            title="Import YouTube video",
+            metadata={
+                "youtube_video_id": self.container.youtube.video_id(value),
+                "project_id": project.id,
+                "rights_confirmed": True,
+                "rights_confirmed_at": project.content_rights_confirmed_at,
+            },
+        )
+        project.latest_job_id = job.id
+        self.container.projects.save(project)
+
+        def work(active: Job) -> JobResult:
+            try:
+                result = self.container.youtube.import_video(
+                    value,
+                    on_progress=lambda progress, stage: active.set_progress(progress * 0.92, stage),
+                )
+                active.set_progress(0.94, "Checking downloaded video")
+                response = self._register_youtube_result(result, value, project=project)
+                active.metadata.update(
+                    {
+                        "source_id": response.id,
+                        "youtube_strategy": result.strategy,
+                        "youtube_format": result.format_id,
+                        "youtube_attempts": result.attempts,
+                        "youtube_metadata_seconds": result.metadata_seconds,
+                        "youtube_download_seconds": result.download_seconds,
+                        "youtube_prepare_seconds": result.prepare_seconds,
+                    }
+                )
+                active.set_progress(0.99, "Ready")
+                source = self.sources.get(response.id)
+                return JobResult(
+                    outputs=[Path(source.path)],
+                    message="YouTube video imported and verified.",
+                    data={"source_id": response.id, "project_id": project.id},
+                )
+            except Exception:
+                project.status = "failed"
+                self.container.projects.save(project)
+                raise
+
+        job.run = work
+        self.jobs.submit(job)
+        return self.job_response(job.id)
+
+    def _register_youtube_result(
+        self,
+        result: Any,
+        url: str,
+        *,
+        project: Project,
+    ) -> SourceAssetResponse:
+        downloaded = result.path
+        metadata = result.metadata
+        record = self.sources.save_path(
+            downloaded,
+            kind="youtube",
+            title=metadata.title or downloaded.stem,
+        )
+        record.channel = metadata.channel
+        record.youtube_url = url
+        return self._finish_source(record, project=project, project_type="youtube_short")
+
+    def list_projects(self, *, limit: int | None = None) -> list[ProjectResponse]:
+        summaries = self.container.projects.list_projects(limit=limit)
+        return [self._project_response(summary) for summary in summaries]
+
+    def get_project(self, project_id: str) -> ProjectDetailResponse:
+        project = self.container.projects.load(project_id)
+        payload = self._project_response(project.summary()).model_dump()
+        source = None
+        if project.source_asset_id:
+            try:
+                source = self.source_response(project.source_asset_id)
+            except ValidationError:
+                source = None
+        return ProjectDetailResponse(**payload, source=source)
+
+    def create_thumbnail_candidates(
+        self, project_id: str, request: ThumbnailRequest
+    ) -> list[ArtifactResponse]:
+        project = self.container.projects.load(project_id)
+        if not project.source_asset_id:
+            raise ValidationError("Add a source video before creating thumbnails.")
+        source = self.sources.get(project.source_asset_id)
+        media = self.container.media.import_file(source.path)
+        job_id = f"thumbnail-{project.id}"
+        output_dir = self.artifacts.output_dir(job_id).parent / "thumbnails"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        positions = [0.12, 0.34, 0.58, 0.82]
+        records: list[ArtifactRecord] = []
+        for index, fraction in enumerate(positions, start=1):
+            cached = self.container.media.thumbnail_for(
+                media,
+                at=max(0.0, media.duration * fraction),
+                width=1280,
+            )
+            if cached is None:
+                continue
+            target = output_dir / f"{project.slug}-candidate-{index}.jpg"
+            shutil.copy2(cached, target)
+            records.append(
+                self.artifacts.register_thumbnail(job_id, target, index=index)
+            )
+        if not records:
+            raise ValidationError("Thumbnail candidates could not be created.")
+        project.artifact_ids.extend(
+            record.id for record in records if record.id not in project.artifact_ids
+        )
+        project.notes = request.prompt.strip()
+        self.container.projects.save(project)
+        return [self._artifact_response(record) for record in records]
+
+    def plan_ai_edit(self, request: AIEditPlanRequest) -> AIEditPlanResponse:
+        source = self.sources.get(request.source_id)
+        if source.duration > 60.5:
+            raise ValidationError(
+                "AI Editor currently supports videos up to one minute.",
+                hint="Use Auto Clip for longer source videos.",
+            )
+        prompt = request.prompt.strip().lower()
+        output_format: Literal["source", "landscape", "portrait", "square"] = "source"
+        if any(word in prompt for word in ("portrait", "vertical", "reel", "short")):
+            output_format = "portrait"
+        elif "square" in prompt:
+            output_format = "square"
+        elif any(word in prompt for word in ("landscape", "widescreen", "16:9")):
+            output_format = "landscape"
+        auto_captions = any(word in prompt for word in ("caption", "subtitle"))
+        match = re.search(r"(\d{1,2})\s*(?:second|sec|s)\b", prompt)
+        clip_duration = min(source.duration, float(match.group(1)) if match else source.duration)
+        actions = [
+            AIEditActionResponse(kind="trim", label="Keep opening section", value=clip_duration),
+            AIEditActionResponse(kind="format", label="Output format", value=output_format),
+            AIEditActionResponse(kind="captions", label="Auto captions", value=auto_captions),
+        ]
+        project = self._project_for_source(source)
+        project.project_type = "ai_edit"
+        project.output_format = output_format
+        project.captions_enabled = auto_captions
+        project.notes = request.prompt.strip()
+        self.container.projects.save(project)
+        return AIEditPlanResponse(
+            source_id=source.id,
+            summary=(
+                f"Create a {clip_duration:.0f}-second {output_format} edit"
+                f" with captions {'on' if auto_captions else 'off'}."
+            ),
+            actions=actions,
+            segments=[
+                ClipSegmentRequest(
+                    id="ai-edit-segment-1",
+                    index=1,
+                    start=0,
+                    end=clip_duration,
+                    strategy="standard",
+                )
+            ],
+            output_format=output_format,
+            auto_captions=auto_captions,
+        )
+
+    def social_connections(self) -> list[SocialConnectionResponse]:
+        return [
+            SocialConnectionResponse(**asdict(connection))
+            for connection in self.container.social.connections()
+        ]
+
+    def create_schedule(self, request: ScheduleCreateRequest) -> ScheduleResponse:
+        project = self.container.projects.load(request.project_id)
+        archive = self._project_archive(project)
+        schedule = self.container.social.create_schedule_for_archive(
+            archive=Path(archive.path),
+            project_id=project.id,
+            platforms=list(request.platforms),
+            interval_minutes=request.interval_minutes,
+            start_at=request.start_at,
+            caption=request.caption,
+        )
+        project.scheduling_status = "draft"
+        self.container.projects.save(project)
+        ready = all(
+            connection.connected
+            for platform, connection in self.container.social.connection_map().items()
+            if platform in request.platforms
+        )
+        return ScheduleResponse(
+            id=schedule.id,
+            project_id=project.id,
+            archive_name=schedule.archive_name,
+            created_at=schedule.created_at,
+            posts=[ScheduledPostResponse(**asdict(post)) for post in schedule.posts],
+            publish_ready=ready,
+        )
+
+    def get_source(self, source_id: str) -> SourceAssetRecord:
+        return self.sources.get(source_id)
+
+    def source_response(self, source_id: str) -> SourceAssetResponse:
+        return self._source_response(self.sources.get(source_id))
+
+    def standard_plan(self, source_id: str, request: StandardPlanRequest) -> StandardPlanResponse:
+        source = self.sources.get(source_id)
+        maximum = max(0, int(source.duration // request.duration))
+        count = maximum if request.count == "max" else min(maximum, max(0, request.count))
+        segments = [
+            ClipSegmentRequest(
+                id=f"standard-segment-{index + 1}",
+                index=index + 1,
+                start=round(index * request.duration, 3),
+                end=round((index + 1) * request.duration, 3),
+            )
+            for index in range(count)
+        ]
+        return StandardPlanResponse(
+            duration=request.duration,
+            requested_count=count,
+            max_count=maximum,
+            segments=segments,
+        )
+
+    def create_render(self, request: RenderRequest) -> JobResponse:
+        source = self.sources.get(request.source_id)
+        segments = self._validated_segments(request.segments, source.duration)
+        plan = SplitPlan(
+            source=Path(source.path),
+            mode=cast(
+                SplitMode,
+                SplitMode.FIXED
+                if all(item.strategy == "standard" for item in request.segments)
+                else SplitMode.AI_HIGHLIGHT,
+            ),
+            segments=tuple(segments),
+            parameters={"selection_strategy": request.segments[0].strategy},
+        )
+        accurate = not self._can_stream_copy_plan(source, segments, request)
+        project = self._project_for_source(source)
+        project.plan = plan
+        project.status = "processing"
+        project.platform = self._platform_label(request.platforms)
+        project.output_format = request.output_format
+        project.captions_enabled = request.auto_captions
+
+        job = Job(
+            kind=cast(JobKind, JobKind.SPLIT),
+            title=f"Create {len(segments)} clips from {source.title}",
+            source=Path(source.path),
+            metadata={
+                "source_id": source.id,
+                "project_id": project.id,
+                "segment_count": len(segments),
+                "output_format": request.output_format,
+                "captions_enabled": request.auto_captions,
+            },
+        )
+        project.latest_job_id = job.id
+        self.container.projects.save(project)
+
+        def work(active: Job) -> JobResult:
+            try:
+                transcript = None
+                if request.auto_captions:
+                    transcript = self.container.ai.transcribe(
+                        source.path,
+                        on_progress=lambda value, stage: active.set_progress(
+                            value * 0.28, stage
+                        ),
+                        cancel_token=active.cancel_token,
+                    )
+                    project.transcript_file = self.container.ai.cache_path(
+                        Path(source.path)
+                    )
+
+                output_dir = self.artifacts.output_dir(active.id)
+                render_start = 0.28 if transcript is not None else 0.0
+                render_share = 0.48 if transcript is not None else 0.82
+
+                def progress(value: float, stage: str) -> None:
+                    active.set_progress(render_start + value * render_share, stage)
+
+                outputs = self.container.split.render(
+                    plan,
+                    output_dir,
+                    name_pattern="clip-{index:02d}",
+                    container=request.container,
+                    accurate=accurate,
+                    output_format=request.output_format,
+                    portrait_mode=request.portrait_mode,
+                    on_progress=progress,
+                    cancel_token=active.cancel_token,
+                    stem=source.title,
+                )
+                if transcript is not None:
+                    outputs = self._burn_captions(
+                        active,
+                        outputs,
+                        segments,
+                        transcript,
+                        project,
+                    )
+
+                active.set_progress(0.94, "Preparing downloads")
+                clips = [
+                    self.artifacts.register_clip(
+                        active.id,
+                        path,
+                        index=segment.index,
+                        duration=segment.duration,
+                        output_format=request.output_format,
+                        captions_enabled=request.auto_captions,
+                    )
+                    for path, segment in zip(outputs, segments, strict=True)
+                ]
+                active.set_progress(0.98, "Creating ZIP")
+                archive = self.artifacts.create_zip(
+                    active.id, clips, source_title=source.title
+                )
+                project.outputs = [*outputs, Path(archive.path)]
+                project.artifact_ids = [item.id for item in [*clips, archive]]
+                project.status = "completed"
+                self.container.projects.save(project)
+                return JobResult(
+                    outputs=[*outputs, Path(archive.path)],
+                    message=f"Created {len(outputs)} clips and one ZIP archive.",
+                    data={"source_id": source.id, "project_id": project.id},
+                )
+            except Exception:
+                project.status = "failed"
+                self.container.projects.save(project)
+                raise
+
+        job.run = work
+        self.jobs.submit(job)
+        return self.job_response(job.id)
+
+    def _can_stream_copy_plan(
+        self,
+        source: SourceAssetRecord,
+        segments: list[Segment],
+        request: RenderRequest,
+    ) -> bool:
+        """Use stream copy only when every boundary lands on a real keyframe."""
+        if (
+            not request.fast_mode
+            or request.auto_captions
+            or request.output_format != "source"
+        ):
+            return False
+        info = self.container.media.import_file(source.path)
+        video = self.container.resolve("video_engine")
+        if not video.can_stream_copy(info, request.container):
+            return False
+        keyframes = self.container.resolve("probe").keyframe_times(source.path)
+        if not keyframes:
+            return False
+        return all(
+            segment.start <= 0.05 or any(abs(keyframe - segment.start) <= 0.08 for keyframe in keyframes)
+            for segment in segments
+        )
+
+    def job_response(self, job_id: str) -> JobResponse:
+        job = self.jobs.get(job_id)
+        if job is None:
+            raise ValidationError("That render job could not be found.", hint="Start the render again.")
+        if job.status.value in {"failed", "cancelled"}:
+            self.artifacts.discover_clips(job.id)
+        records = self.artifacts.list_for_job(job.id)
+        artifacts = [self._artifact_response(item) for item in records]
+        zip_artifact = next((item for item in artifacts if item.kind == "zip"), None)
+        return JobResponse(
+            id=job.id,
+            source_id=str(job.metadata.get("source_id", "")),
+            project_id=str(job.metadata.get("project_id", "")),
+            status=job.status.value,
+            progress=round(job.progress, 4),
+            percent=job.percent,
+            stage=job.stage or "Queued",
+            elapsed=round(job.elapsed, 3),
+            error=job.error,
+            error_code=str(job.metadata.get("error_code") or "") or None,
+            hint=job.hint,
+            artifacts=artifacts,
+            zip_artifact=zip_artifact,
+        )
+
+    def get_artifact(self, artifact_id: str) -> ArtifactRecord:
+        return self.artifacts.get(artifact_id)
+
+    def _project_archive(self, project: Project) -> ArtifactRecord:
+        for artifact_id in reversed(project.artifact_ids):
+            try:
+                artifact = self.artifacts.get(artifact_id)
+            except ValidationError:
+                continue
+            if artifact.kind == "zip":
+                return artifact
+        raise ValidationError("Render a project ZIP before creating a schedule.")
+
+    def _finish_source(
+        self,
+        record: SourceAssetRecord,
+        *,
+        project: Project | None = None,
+        project_type: str,
+    ) -> SourceAssetResponse:
+        try:
+            info = self.container.media.import_file(record.path)
+        except Exception:
+            shutil.rmtree(Path(record.path).parent, ignore_errors=True)
+            raise
+        if not info.has_video:
+            shutil.rmtree(Path(record.path).parent, ignore_errors=True)
+            raise ValidationError("This file has no video track.", hint="Choose a video file.")
+        width, height = info.video.display_resolution
+        record.name = info.name
+        record.duration = info.duration
+        record.width = width
+        record.height = height
+        record.size_bytes = info.size_bytes
+        record.mime_type = mimetypes.guess_type(info.name)[0] or "video/mp4"
+        thumbnail = self.container.media.thumbnail_for(info)
+        if thumbnail:
+            poster = Path(record.path).parent / "poster.jpg"
+            shutil.copy2(thumbnail, poster)
+            record.poster_path = str(poster)
+        resolved_project = project or self.container.projects.create(record.title, info)
+        resolved_project.name = record.title
+        resolved_project.source_path = Path(record.path)
+        resolved_project.duration = info.duration
+        resolved_project.thumbnail = Path(record.poster_path) if record.poster_path else None
+        resolved_project.project_type = project_type
+        resolved_project.source_asset_id = record.id
+        resolved_project.status = "ready"
+        record.project_id = resolved_project.id
+        self.container.projects.save(resolved_project)
+        self.sources.update(record)
+        return self._source_response(record)
+
+    def _require_youtube_permission(self, url: str, confirmed: bool) -> str:
+        value = self.container.youtube.validate_url(url)
+        if not confirmed:
+            raise ValidationError(
+                "Confirm that you have permission to use this video.",
+                hint=(
+                    "Only import videos you own, license, or have permission to edit."
+                ),
+            )
+        return value
+
+    def _start_youtube_project(self, url: str) -> Project:
+        video_id = self.container.youtube.video_id(url)
+        project = self.container.projects.create(f"YouTube {video_id}")
+        project.project_type = "youtube_short"
+        project.status = "importing"
+        project.content_rights_confirmed = True
+        project.content_rights_confirmed_at = time.time()
+        project.content_rights_source = url
+        self.container.projects.save(project)
+        return project
+
+    def _project_for_source(self, source: SourceAssetRecord) -> Project:
+        if source.project_id:
+            return self.container.projects.load(source.project_id)
+        info = self.container.media.import_file(source.path)
+        project = self.container.projects.create(source.title, info)
+        project.source_asset_id = source.id
+        project.status = "ready"
+        source.project_id = project.id
+        self.sources.update(source)
+        self.container.projects.save(project)
+        return project
+
+    def _burn_captions(
+        self,
+        active: Job,
+        outputs: list[Path],
+        segments: list[Segment],
+        transcript: Any,
+        project: Project,
+    ) -> list[Path]:
+        captioned: list[Path] = []
+        total = max(1, len(outputs))
+        for position, (path, segment) in enumerate(
+            zip(outputs, segments, strict=True), start=1
+        ):
+            media = self.container.media.import_file(path)
+            temporary = path.with_name(f"{path.stem}-captioned{path.suffix}")
+
+            def progress(value: float, stage: str, index: int = position) -> None:
+                base = 0.76 + ((index - 1) / total) * 0.17
+                active.set_progress(
+                    min(0.93, base + (value / total) * 0.17),
+                    f"Captions {index} of {total} · {stage}",
+                )
+
+            self.container.subtitles.burn(
+                media,
+                transcript,
+                temporary,
+                style=project.caption_style,
+                offset=segment.start,
+                on_progress=progress,
+                cancel_token=active.cancel_token,
+            )
+            path.unlink(missing_ok=True)
+            temporary.replace(path)
+            captioned.append(path)
+        return captioned
+
+    @staticmethod
+    def _platform_label(platforms: Sequence[str]) -> str:
+        unique = set(platforms)
+        if unique == {"youtube", "instagram"}:
+            return "both"
+        return next(iter(unique), "both")
+
+    def _project_response(self, summary: ProjectSummary) -> ProjectResponse:
+        workflow = "ai-editor" if summary.project_type == "ai_edit" else "auto-clip"
+        thumbnail_url = (
+            f"/api/sources/{summary.source_asset_id}/poster"
+            if summary.thumbnail and summary.source_asset_id
+            else None
+        )
+        download_artifact_id = None
+        for artifact_id in reversed(summary.artifact_ids):
+            try:
+                if self.artifacts.get(artifact_id).kind == "zip":
+                    download_artifact_id = artifact_id
+                    break
+            except ValidationError:
+                continue
+        return ProjectResponse(
+            id=summary.id,
+            title=summary.name,
+            project_type=summary.project_type,
+            source_asset_id=summary.source_asset_id,
+            thumbnail_url=thumbnail_url,
+            created_at=summary.created_at,
+            updated_at=summary.updated_at,
+            status=summary.status,
+            platform=summary.platform,
+            output_format=summary.output_format,
+            clip_count=summary.clip_count,
+            artifact_ids=list(summary.artifact_ids),
+            download_artifact_id=download_artifact_id,
+            scheduling_status=summary.scheduling_status,
+            latest_job_id=summary.latest_job_id,
+            captions_enabled=summary.captions_enabled,
+            workflow_route=workflow,
+        )
+
+    @staticmethod
+    def _youtube_metadata(downloaded: Path) -> dict[str, Any]:
+        sidecars = [downloaded.with_suffix(".info.json"), *downloaded.parent.glob("*.info.json")]
+        for sidecar in sidecars:
+            if sidecar.is_file():
+                try:
+                    return json.loads(sidecar.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    pass
+        return {}
+
+    @staticmethod
+    def _validated_segments(requests: list[ClipSegmentRequest], source_duration: float) -> list[Segment]:
+        ordered = sorted(requests, key=lambda item: item.index)
+        if [item.index for item in ordered] != list(range(1, len(ordered) + 1)):
+            raise ValidationError("Clip numbers must start at 1 and stay consecutive.")
+        previous_end = 0.0
+        segments: list[Segment] = []
+        for item in ordered:
+            if item.end <= item.start:
+                raise ValidationError(f"Clip {item.index} has an invalid time range.")
+            if item.end > source_duration + 0.05:
+                raise ValidationError(f"Clip {item.index} extends beyond the source video.")
+            if item.start < previous_end - 0.01:
+                raise ValidationError("Clip ranges cannot overlap.")
+            previous_end = item.end
+            segments.append(
+                Segment(
+                    id=item.id,
+                    index=item.index,
+                    start=item.start,
+                    end=item.end,
+                    source=cast(
+                        SegmentSource,
+                        SegmentSource.FIXED if item.strategy == "standard" else SegmentSource.AI,
+                    ),
+                )
+            )
+        return segments
+
+    @staticmethod
+    def _source_response(record: SourceAssetRecord) -> SourceAssetResponse:
+        return SourceAssetResponse(
+            id=record.id,
+            kind=record.kind,
+            name=record.name,
+            title=record.title,
+            duration=record.duration,
+            width=record.width,
+            height=record.height,
+            mime_type=record.mime_type,
+            size_bytes=record.size_bytes,
+            channel=record.channel,
+            youtube_url=record.youtube_url,
+            project_id=record.project_id,
+            media_url=f"/api/sources/{record.id}/media",
+            poster_url=f"/api/sources/{record.id}/poster" if record.poster_path else None,
+        )
+
+    @staticmethod
+    def _artifact_response(record: ArtifactRecord) -> ArtifactResponse:
+        return ArtifactResponse(
+            id=record.id,
+            job_id=record.job_id,
+            kind=record.kind,
+            name=record.name,
+            size_bytes=record.size_bytes,
+            mime_type=record.mime_type,
+            index=record.index,
+            duration=record.duration,
+            output_format=record.output_format,
+            captions_enabled=record.captions_enabled,
+            stream_url=(
+                f"/api/artifacts/{record.id}/media"
+                if record.kind in {"clip", "thumbnail"}
+                else None
+            ),
+            download_url=f"/api/artifacts/{record.id}/download",
+        )

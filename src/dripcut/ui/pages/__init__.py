@@ -16,6 +16,7 @@ from dripcut.ui.pages.exports import ExportsPage
 from dripcut.ui.pages.plugins import PluginsPage
 from dripcut.ui.pages.projects import ProjectsPage
 from dripcut.ui.pages.settings import SettingsPage
+from dripcut.ui.pages.social import SocialPage
 from dripcut.ui.pages.split import SplitPage
 from dripcut.ui.pages.subtitles import SubtitlesPage
 from dripcut.ui.pages.workspace import WorkspacePage
@@ -31,6 +32,7 @@ __all__ = [
     "ProjectsPage",
     "SettingsPage",
     "SplitPage",
+    "SocialPage",
     "SubtitlesPage",
     "WorkspacePage",
     "build_pages",
@@ -54,6 +56,7 @@ def build_pages() -> list[Page]:
         SubtitlesPage(),
         BatchPage(),
         ExportsPage(),
+        SocialPage(),
         ProjectsPage(),
         SettingsPage(),
     ]
@@ -91,7 +94,7 @@ def nav_layout(items: list[NavItem]) -> list[NavItem | NavGroup]:
         )
     if "projects" in by_key:
         layout.append(by_key["projects"])
-    tail = [key for key in ("exports", "settings") if key in by_key]
+    tail = [key for key in ("exports", "social", "settings") if key in by_key]
     if tail:
         layout.append(rule)
         layout.extend(by_key[key] for key in tail)
