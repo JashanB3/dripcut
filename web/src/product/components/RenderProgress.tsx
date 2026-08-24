@@ -13,6 +13,7 @@ export function RenderProgress({ job, onUpdate, onComplete, onBack }: {
   useEffect(() => {
     if (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled") return;
     let active = true;
+    let timer: number | undefined;
     const poll = async () => {
       try {
         const latest = await getClipJob(job.id);
@@ -21,11 +22,15 @@ export function RenderProgress({ job, onUpdate, onComplete, onBack }: {
         if (latest.status === "succeeded") onComplete(latest);
       } catch {
         // A brief API restart should not discard the render already running.
+      } finally {
+        if (active) timer = window.setTimeout(() => void poll(), 1_500);
       }
     };
-    const timer = window.setInterval(() => void poll(), 500);
     void poll();
-    return () => { active = false; window.clearInterval(timer); };
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [job.id, job.status, onComplete, onUpdate]);
 
   const clips = job.artifacts.filter((artifact) => artifact.kind === "clip");

@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { fetchProjects } from "../api/client";
+import { apiUrl, fetchProjects } from "../api/client";
 import type { ApiProject, ProductRoute } from "../models";
 
 const quickActions = [
@@ -121,7 +121,7 @@ export function HomePage({ onCreate, onNavigate }: {
                   <small>{new Date(project.updatedAt * 1000).toLocaleDateString()}<em>{project.status}</em></small>
                 </div>
               </button>
-              {project.downloadArtifactId && <a className="project-download" href={`/api/artifacts/${project.downloadArtifactId}/download`} download><Download size={14} /> Download</a>}
+              {project.downloadArtifactId && <a className="project-download" href={apiUrl(`/api/artifacts/${project.downloadArtifactId}/download`)} download><Download size={14} /> Download</a>}
             </article>
           ))}
         </div>}

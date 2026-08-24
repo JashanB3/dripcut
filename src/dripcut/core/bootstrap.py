@@ -7,6 +7,10 @@ function rather than hunting for import sites.
 
 from __future__ import annotations
 
+import os
+
+from dotenv import load_dotenv
+
 from dripcut.core.config import Settings, load_settings
 from dripcut.core.container import ServiceContainer
 from dripcut.core.events import EventBus, EventName
@@ -15,6 +19,7 @@ from dripcut.core.paths import AppPaths, app_paths
 from dripcut.engines.ai.analysis import AnalysisEngine
 from dripcut.engines.ai.llm import OllamaClient
 from dripcut.engines.ai.transcription import TranscriptionEngine
+from dripcut.engines.ai.transcription_provider import GroqTranscriptionProvider
 from dripcut.engines.export.queue import JobQueue
 from dripcut.engines.ffmpeg.probe import MediaProbe
 from dripcut.engines.ffmpeg.runner import FFmpegRunner
@@ -56,6 +61,7 @@ def build_container(
     Returns:
         A fully wired :class:`ServiceContainer`.
     """
+    load_dotenv(override=False)
     resolved_paths = paths or app_paths()
     resolved_settings = settings or load_settings(resolved_paths.config_file)
     setup_logging(resolved_settings.log_level)
@@ -100,9 +106,15 @@ def build_container(
         language=resolved_settings.ai.whisper_language,
         download_root=resolved_paths.models,
     )
+    groq_transcription = GroqTranscriptionProvider(
+        runner,
+        api_key=os.environ.get("GROQ_API_KEY"),
+        model=resolved_settings.ai.groq_transcription_model,
+    )
     analysis = AnalysisEngine(llm, enabled=resolved_settings.ai.enable_ai)
     container.register_instance("llm", llm)
     container.register_instance("transcription_engine", transcription)
+    container.register_instance("groq_transcription_provider", groq_transcription)
     container.register_instance("analysis_engine", analysis)
 
     queue = JobQueue(
@@ -114,7 +126,15 @@ def build_container(
 
     # --- services -----------------------------------------------------------
     notifications = NotificationService(events)
-    ai_service = AIService(transcription, analysis, llm, events, resolved_settings, resolved_paths)
+    ai_service = AIService(
+        transcription,
+        analysis,
+        llm,
+        events,
+        resolved_settings,
+        resolved_paths,
+        groq_transcription=groq_transcription,
+    )
     media_service = MediaService(probe, video_engine, events, resolved_settings, resolved_paths)
     youtube_service = YouTubeService(resolved_paths)
     social_service = SocialScheduleService(resolved_paths)

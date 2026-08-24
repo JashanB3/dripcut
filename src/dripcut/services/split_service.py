@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +11,6 @@ from dripcut.core.config import Settings
 from dripcut.core.errors import ValidationError
 from dripcut.core.events import EventBus, EventName
 from dripcut.core.logging import get_logger
-from dripcut.engines.ffmpeg.filters import ScaleMode
 from dripcut.engines.ffmpeg.runner import FFmpegRunner
 from dripcut.engines.split.base import SplitContext
 from dripcut.engines.split.registry import SplitRegistry
@@ -126,6 +125,8 @@ class SplitService:
         on_progress: ProgressFn | None = None,
         cancel_token: CancelToken | None = None,
         stem: str | None = None,
+        subtitle_paths: Sequence[Path | None] | None = None,
+        caption_overlays: Sequence[Sequence[tuple[Path, float, float]]] | None = None,
     ) -> list[Path]:
         """Render every segment in a plan.
 
@@ -153,12 +154,18 @@ class SplitService:
             "square",
             "landscape",
         }
+        if subtitle_paths is not None and len(subtitle_paths) != total:
+            raise ValidationError("Each clip needs one matching subtitle entry.")
+        if caption_overlays is not None and len(caption_overlays) != total:
+            raise ValidationError("Each clip needs one matching caption-overlay entry.")
 
         for position, segment in enumerate(plan.segments, start=1):
             if cancel_token is not None:
                 cancel_token.raise_if_cancelled()
             filename = segment.output_name(base_stem, settings.suffix, pattern=name_pattern)
             target = output_dir / safe_filename(filename, fallback=f"{base_stem}-{position:03d}")
+            subtitle_path = subtitle_paths[position - 1] if subtitle_paths is not None else None
+            overlays = caption_overlays[position - 1] if caption_overlays is not None else None
 
             def segment_progress(fraction: float, stage: str, _position: int = position) -> None:
                 """Map a single clip's progress onto the whole plan."""
@@ -168,52 +175,24 @@ class SplitService:
                 base = (_position - 1) / total
                 on_progress(min(0.999, base + share), f"Clip {_position} of {total} \u00b7 {stage}")
 
-            if should_reframe:
-                # Two passes: cut first (cheap, exact), then reframe the short clip.
-                # Reframing the whole source once per segment would be far slower.
-                scratch = target.with_name(f".{target.stem}-cut{settings.suffix}")
-                try:
-                    self.video.trim(
-                        plan.source,
-                        scratch,
-                        start=segment.start,
-                        end=segment.end,
-                        settings=EncodeSettings.for_container(container, quality=resolved_quality),
-                        accurate=accurate,
-                        on_progress=segment_progress,
-                        cancel_token=cancel_token,
-                    )
-                    if resize:
-                        rendered = self.video.transform(
-                            scratch,
-                            target,
-                            resize=resize,
-                            settings=EncodeSettings.for_container(container, quality=resolved_quality),
-                            on_progress=segment_progress,
-                            cancel_token=cancel_token,
-                        )
-                    elif profile == "portrait":
-                        rendered = self.video.portrait_transform(
-                            scratch,
-                            target,
-                            mode=portrait,
-                            target_size=target_size,
-                            settings=EncodeSettings.for_container(container, quality=resolved_quality),
-                            on_progress=segment_progress,
-                            cancel_token=cancel_token,
-                        )
-                    else:
-                        rendered = self.video.transform(
-                            scratch,
-                            target,
-                            resize=target_size,
-                            scale_mode=ScaleMode.FILL,
-                            settings=EncodeSettings.for_container(container, quality=resolved_quality),
-                            on_progress=segment_progress,
-                            cancel_token=cancel_token,
-                        )
-                finally:
-                    scratch.unlink(missing_ok=True)
+            if should_reframe or subtitle_path is not None or overlays:
+                rendered = self.video.render_segment(
+                    plan.source,
+                    target,
+                    start=segment.start,
+                    end=segment.end,
+                    output_format=profile,
+                    portrait_mode=portrait,
+                    target_size=target_size,
+                    resize=resize,
+                    subtitles=subtitle_path,
+                    caption_overlays=overlays,
+                    settings=EncodeSettings.for_container(
+                        container, quality=resolved_quality
+                    ),
+                    on_progress=segment_progress,
+                    cancel_token=cancel_token,
+                )
             else:
                 rendered = self.video.trim(
                     plan.source,

@@ -428,6 +428,144 @@ class VideoEngine:
         )
         return target
 
+    def render_segment(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        start: float,
+        end: float,
+        output_format: str = "source",
+        portrait_mode: str = "center_crop",
+        target_size: tuple[int, int] | None = None,
+        resize: tuple[int | None, int | None] | None = None,
+        subtitles: Path | None = None,
+        caption_overlays: Sequence[tuple[Path, float, float]] | None = None,
+        settings: EncodeSettings | None = None,
+        on_progress: ProgressCallback | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> Path:
+        """Trim, reframe, caption, and encode one source segment in one pass."""
+        info = self._info(source)
+        duration = min(float(end), info.duration) - max(0.0, float(start))
+        if duration < 0.02:
+            raise ValidationError("That range is too short to export.")
+        container = destination.suffix.lstrip(".").lower() or "mp4"
+        config = settings or EncodeSettings.for_container(container)
+        config.stream_copy = False
+        target = self._finalise(destination, overwrite=True)
+        profile = str(output_format)
+        width, height = target_size or {
+            "portrait": (1080, 1920),
+            "square": (1080, 1080),
+            "landscape": (1920, 1080),
+        }.get(profile, (0, 0))
+
+        fast_seek = max(0.0, float(start) - 2.0)
+        args: list[str] = [
+            "-ss",
+            f"{fast_seek:.3f}",
+            "-i",
+            str(info.path),
+        ]
+        for overlay_path, _, _ in caption_overlays or []:
+            args += ["-loop", "1", "-framerate", "1", "-i", str(overlay_path)]
+        args += [
+            "-ss",
+            f"{float(start) - fast_seek:.3f}",
+            "-t",
+            f"{duration:.3f}",
+        ]
+
+        if profile == "portrait" and portrait_mode == "blur_background":
+            chains = build_blur_background_filters(width, height)
+            output_label = "outv"
+            if subtitles is not None:
+                chains.append(f"[outv]{subtitle_filter(str(subtitles))}[captioned]")
+                output_label = "captioned"
+            for index, (_, cue_start, cue_end) in enumerate(
+                caption_overlays or [], start=1
+            ):
+                next_label = f"captioned{index}"
+                chains.append(
+                    f"[{output_label}][{index}:v]overlay=0:0:"
+                    f"enable='between(t,{cue_start:.3f},{cue_end:.3f})'[{next_label}]"
+                )
+                output_label = next_label
+            args += ["-filter_complex", ";".join(chains), "-map", f"[{output_label}]"]
+            if info.has_audio:
+                args += ["-map", "0:a?"]
+        else:
+            graph = FilterGraph()
+            if resize:
+                graph.extend(scale_filter(resize[0], resize[1], mode=ScaleMode.FILL))
+            elif profile == "portrait":
+                if (
+                    portrait_mode == "ai_tracking"
+                    and info.video
+                    and info.video.orientation == "landscape"
+                ):
+                    analysis = build_tracked_crop(
+                        info.path,
+                        duration,
+                        target_aspect=width / height,
+                        source_offset=float(start),
+                        on_progress=on_progress,
+                    )
+                    if analysis.has_tracking:
+                        crop = analysis.crop
+                        graph.add(
+                            "crop="
+                            f"w='trunc(({crop.width})/2)*2':"
+                            f"h='trunc(({crop.height})/2)*2':"
+                            f"x='trunc(({crop.x})/2)*2':"
+                            f"y='trunc(({crop.y})/2)*2'"
+                        )
+                        graph.add(f"scale={width}:{height}:flags=lanczos")
+                    else:
+                        graph.extend(scale_filter(width, height, mode=ScaleMode.FILL))
+                else:
+                    graph.extend(scale_filter(width, height, mode=ScaleMode.FILL))
+            elif profile in {"landscape", "square"}:
+                graph.extend(scale_filter(width, height, mode=ScaleMode.FILL))
+            if subtitles is not None:
+                graph.add(subtitle_filter(str(subtitles)))
+            graph.ensure_even()
+            if caption_overlays:
+                chains = [f"[0:v]{graph.render()}[base]"]
+                output_label = "base"
+                for index, (_, cue_start, cue_end) in enumerate(caption_overlays, start=1):
+                    next_label = f"captioned{index}"
+                    chains.append(
+                        f"[{output_label}][{index}:v]overlay=0:0:"
+                        f"enable='between(t,{cue_start:.3f},{cue_end:.3f})'[{next_label}]"
+                    )
+                    output_label = next_label
+                args += [
+                    "-filter_complex",
+                    ";".join(chains),
+                    "-map",
+                    f"[{output_label}]",
+                ]
+                if info.has_audio:
+                    args += ["-map", "0:a?"]
+            else:
+                args += graph.as_args()
+
+        args += config.build_args(
+            video_encoder=self._encoder(config), has_audio=info.has_audio
+        )
+        args.append(str(target))
+        self.runner.run(
+            args,
+            duration=duration,
+            on_progress=on_progress,
+            cancel_token=cancel_token,
+            outputs=[target],
+            stage="Creating final clip",
+        )
+        return target
+
     def compress(
         self,
         source: Path,

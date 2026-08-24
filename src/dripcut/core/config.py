@@ -33,6 +33,7 @@ SplitOutputFormat = Literal["landscape", "portrait", "square"]
 PortraitMode = Literal["ai_tracking", "center_crop", "blur_background"]
 WhisperModelName = Literal["tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium"]
 ComputeType = Literal["int8", "int8_float16", "float16", "float32"]
+TranscriptionProviderName = Literal["groq", "local", "auto"]
 
 
 @dataclass(slots=True)
@@ -48,8 +49,10 @@ class ServerSettings:
 
 @dataclass(slots=True)
 class AISettings:
-    """Local model configuration. Nothing here reaches the network."""
+    """AI provider configuration; credentials are read separately from the environment."""
 
+    transcription_provider: TranscriptionProviderName = "groq"
+    groq_transcription_model: str = "whisper-large-v3-turbo"
     whisper_model: WhisperModelName = "small"
     whisper_compute_type: ComputeType = "int8"
     whisper_device: str = "auto"
@@ -187,6 +190,8 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "DRIPCUT_HOST": ("server", "host"),
     "DRIPCUT_THEME": ("ui", "theme"),
     "DRIPCUT_WHISPER_MODEL": ("ai", "whisper_model"),
+    "DRIPCUT_TRANSCRIPTION_PROVIDER": ("ai", "transcription_provider"),
+    "DRIPCUT_GROQ_TRANSCRIPTION_MODEL": ("ai", "groq_transcription_model"),
     "DRIPCUT_OLLAMA_MODEL": ("ai", "ollama_model"),
     "DRIPCUT_OLLAMA_HOST": ("ai", "ollama_host"),
     "DRIPCUT_LOG_LEVEL": ("log_level",),

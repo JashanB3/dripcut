@@ -6,8 +6,10 @@ import json
 import mimetypes
 import re
 import shutil
+import threading
 import time
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, BinaryIO, Literal, cast
@@ -344,47 +346,208 @@ class WebClipService:
         def work(active: Job) -> JobResult:
             try:
                 transcript = None
-                if request.auto_captions:
-                    transcript = self.container.ai.transcribe(
+                output_dir = self.artifacts.output_dir(active.id)
+                timings: dict[str, float | bool] = {}
+                subtitle_paths: list[Path | None] | None = None
+                caption_overlays: list[list[tuple[Path, float, float]]] | None = None
+                caption_asset_dirs: list[Path] = []
+
+                def transcribe(progress_callback) -> Any:
+                    started = time.monotonic()
+                    result = self.container.ai.transcribe(
                         source.path,
-                        on_progress=lambda value, stage: active.set_progress(
-                            value * 0.28, stage
-                        ),
+                        source_asset_id=source.id,
+                        on_progress=progress_callback,
                         cancel_token=active.cancel_token,
                     )
-                    project.transcript_file = self.container.ai.cache_path(
-                        Path(source.path)
+                    timings["transcription_seconds"] = round(
+                        time.monotonic() - started, 3
+                    )
+                    timings["transcript_cache_hit"] = bool(
+                        result.metadata.get("cache_hit", False)
+                    )
+                    timings["provider_api_called"] = bool(
+                        result.metadata.get("provider_api_seconds") is not None
+                        and not result.metadata.get("cache_hit", False)
+                    )
+                    if not timings["transcript_cache_hit"]:
+                        for key in (
+                            "audio_extraction_seconds",
+                            "provider_api_seconds",
+                            "transcript_normalization_seconds",
+                        ):
+                            value = result.metadata.get(key)
+                            if isinstance(value, int | float):
+                                timings[key] = round(float(value), 3)
+                    return result
+
+                def render(progress_callback) -> list[Path]:
+                    started = time.monotonic()
+                    try:
+                        rendered = self.container.split.render(
+                            plan,
+                            output_dir,
+                            name_pattern="clip-{index:02d}",
+                            container=request.container,
+                            accurate=accurate,
+                            output_format=request.output_format,
+                            portrait_mode=request.portrait_mode,
+                            on_progress=progress_callback,
+                            cancel_token=active.cancel_token,
+                            stem=source.title,
+                            subtitle_paths=subtitle_paths,
+                            caption_overlays=caption_overlays,
+                        )
+                    finally:
+                        for subtitle_path in subtitle_paths or []:
+                            if subtitle_path is not None:
+                                subtitle_path.unlink(missing_ok=True)
+                        for asset_dir in caption_asset_dirs:
+                            shutil.rmtree(asset_dir, ignore_errors=True)
+                    timings["clip_render_seconds"] = round(
+                        time.monotonic() - started, 3
+                    )
+                    return rendered
+
+                provider = self.container.ai.active_transcription_provider
+                native_subtitles = self.container.resolve("ffmpeg").has_filter(
+                    "subtitles"
+                )
+                single_pass_captions = bool(
+                    request.auto_captions
+                    and (native_subtitles or self.container.subtitles.can_overlay())
+                )
+                if single_pass_captions:
+                    transcript = transcribe(
+                        lambda value, stage: active.set_progress(
+                            value * 0.28, f"Transcribing · {stage}"
+                        )
+                    )
+                    active.set_progress(0.29, "Adding captions")
+                    preparation_started = time.monotonic()
+                    video_size = {
+                        "portrait": (1080, 1920),
+                        "square": (1080, 1080),
+                        "landscape": (1920, 1080),
+                    }.get(request.output_format, (source.width, source.height))
+                    if native_subtitles:
+                        subtitle_paths = []
+                    else:
+                        caption_overlays = []
+                    used_segments = 0
+                    for segment in segments:
+                        clip_transcript = transcript.window(segment.start, segment.end)
+                        if clip_transcript.is_empty:
+                            if subtitle_paths is not None:
+                                subtitle_paths.append(None)
+                            if caption_overlays is not None:
+                                caption_overlays.append([])
+                            continue
+                        if subtitle_paths is not None:
+                            subtitle_path = output_dir / f".clip-{segment.index:02d}.ass"
+                            self.container.subtitles.write(
+                                clip_transcript,
+                                subtitle_path,
+                                style=project.caption_style,
+                                subtitle_format="ass",
+                                video_size=video_size,
+                            )
+                            subtitle_paths.append(subtitle_path)
+                        elif caption_overlays is not None:
+                            asset_dir = output_dir / f".captions-{segment.index:02d}"
+                            caption_asset_dirs.append(asset_dir)
+                            caption_overlays.append(
+                                self.container.subtitles.prepare_overlays(
+                                    clip_transcript,
+                                    asset_dir,
+                                    style=project.caption_style,
+                                    video_size=video_size,
+                                )
+                            )
+                        used_segments += len(clip_transcript.segments)
+                    timings["subtitle_preparation_seconds"] = round(
+                        time.monotonic() - preparation_started, 3
+                    )
+                    timings["clip_transcript_segments"] = float(used_segments)
+                    timings["single_pass_caption_render"] = True
+                    timings["caption_overlay_fallback"] = not native_subtitles
+                    outputs = render(
+                        lambda value, stage: active.set_progress(
+                            0.30 + value * 0.63, f"Creating clips · {stage}"
+                        )
+                    )
+                    timings["final_render_seconds"] = timings["clip_render_seconds"]
+                    timings["caption_encoding_in_final_pass"] = True
+                elif request.auto_captions and provider.remote:
+                    progress_state = {"transcription": 0.0, "render": 0.0}
+                    progress_lock = threading.Lock()
+
+                    def concurrent_progress(kind: str, value: float, stage: str) -> None:
+                        with progress_lock:
+                            progress_state[kind] = max(progress_state[kind], value)
+                            combined = (
+                                progress_state["transcription"] * 0.24
+                                + progress_state["render"] * 0.52
+                            )
+                            phase = (
+                                "Transcribing"
+                                if kind == "transcription"
+                                else "Creating clips"
+                            )
+                            active.set_progress(
+                                min(0.76, combined), f"{phase} · {stage}"
+                            )
+
+                    with ThreadPoolExecutor(
+                        max_workers=2, thread_name_prefix="dripcut-pipeline"
+                    ) as executor:
+                        transcript_future = executor.submit(
+                            transcribe,
+                            lambda value, stage: concurrent_progress(
+                                "transcription", value, stage
+                            ),
+                        )
+                        outputs = render(
+                            lambda value, stage: concurrent_progress(
+                                "render", value, stage
+                            )
+                        )
+                        transcript = transcript_future.result()
+                else:
+                    if request.auto_captions:
+                        transcript = transcribe(
+                            lambda value, stage: active.set_progress(
+                                value * 0.28, f"Transcribing · {stage}"
+                            )
+                        )
+                    render_start = 0.28 if transcript is not None else 0.0
+                    render_share = 0.48 if transcript is not None else 0.82
+                    outputs = render(
+                        lambda value, stage: active.set_progress(
+                            render_start + value * render_share,
+                            f"Creating clips · {stage}",
+                        )
                     )
 
-                output_dir = self.artifacts.output_dir(active.id)
-                render_start = 0.28 if transcript is not None else 0.0
-                render_share = 0.48 if transcript is not None else 0.82
-
-                def progress(value: float, stage: str) -> None:
-                    active.set_progress(render_start + value * render_share, stage)
-
-                outputs = self.container.split.render(
-                    plan,
-                    output_dir,
-                    name_pattern="clip-{index:02d}",
-                    container=request.container,
-                    accurate=accurate,
-                    output_format=request.output_format,
-                    portrait_mode=request.portrait_mode,
-                    on_progress=progress,
-                    cancel_token=active.cancel_token,
-                    stem=source.title,
-                )
                 if transcript is not None:
+                    cache_path = transcript.metadata.get("cache_path")
+                    if cache_path:
+                        project.transcript_file = Path(str(cache_path))
+                if transcript is not None and not single_pass_captions:
+                    caption_started = time.monotonic()
                     outputs = self._burn_captions(
                         active,
                         outputs,
                         segments,
                         transcript,
                         project,
+                        timings,
+                    )
+                    timings["caption_render_seconds"] = round(
+                        time.monotonic() - caption_started, 3
                     )
 
-                active.set_progress(0.94, "Preparing downloads")
+                active.set_progress(0.94, "Finalizing downloads")
                 clips = [
                     self.artifacts.register_clip(
                         active.id,
@@ -396,10 +559,13 @@ class WebClipService:
                     )
                     for path, segment in zip(outputs, segments, strict=True)
                 ]
-                active.set_progress(0.98, "Creating ZIP")
+                active.set_progress(0.98, "Finalizing ZIP")
+                archive_started = time.monotonic()
                 archive = self.artifacts.create_zip(
                     active.id, clips, source_title=source.title
                 )
+                timings["zip_seconds"] = round(time.monotonic() - archive_started, 3)
+                active.metadata["pipeline_timings"] = timings
                 project.outputs = [*outputs, Path(archive.path)]
                 project.artifact_ids = [item.id for item in [*clips, archive]]
                 project.status = "completed"
@@ -407,7 +573,11 @@ class WebClipService:
                 return JobResult(
                     outputs=[*outputs, Path(archive.path)],
                     message=f"Created {len(outputs)} clips and one ZIP archive.",
-                    data={"source_id": source.id, "project_id": project.id},
+                    data={
+                        "source_id": source.id,
+                        "project_id": project.id,
+                        "pipeline_timings": timings,
+                    },
                 )
             except Exception:
                 project.status = "failed"
@@ -562,8 +732,11 @@ class WebClipService:
         segments: list[Segment],
         transcript: Any,
         project: Project,
+        pipeline_timings: dict[str, float | bool],
     ) -> list[Path]:
         captioned: list[Path] = []
+        subtitle_preparation = 0.0
+        caption_encoding = 0.0
         total = max(1, len(outputs))
         for position, (path, segment) in enumerate(
             zip(outputs, segments, strict=True), start=1
@@ -578,6 +751,7 @@ class WebClipService:
                     f"Captions {index} of {total} · {stage}",
                 )
 
+            clip_timings: dict[str, float] = {}
             self.container.subtitles.burn(
                 media,
                 transcript,
@@ -586,10 +760,17 @@ class WebClipService:
                 offset=segment.start,
                 on_progress=progress,
                 cancel_token=active.cancel_token,
+                timings=clip_timings,
             )
+            subtitle_preparation += clip_timings.get("subtitle_preparation_seconds", 0.0)
+            caption_encoding += clip_timings.get("caption_encoding_seconds", 0.0)
             path.unlink(missing_ok=True)
             temporary.replace(path)
             captioned.append(path)
+        pipeline_timings["subtitle_preparation_seconds"] = round(
+            subtitle_preparation, 3
+        )
+        pipeline_timings["caption_encoding_seconds"] = round(caption_encoding, 3)
         return captioned
 
     @staticmethod

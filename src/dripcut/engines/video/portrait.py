@@ -54,10 +54,18 @@ def build_tracked_crop(
     *,
     target_aspect: float = 9 / 16,
     samples: int = 12,
+    source_offset: float = 0.0,
     on_progress: ProgressFn | None = None,
 ) -> PortraitAnalysis:
     """Return a tracked portrait crop, or a centered fallback if detection fails."""
-    points = _analyse(source, duration, target_aspect=target_aspect, samples=samples, on_progress=on_progress)
+    points = _analyse(
+        source,
+        duration,
+        target_aspect=target_aspect,
+        samples=samples,
+        source_offset=source_offset,
+        on_progress=on_progress,
+    )
     if not points:
         return PortraitAnalysis(
             crop=TrackedCrop(
@@ -97,6 +105,7 @@ def _analyse(
     *,
     target_aspect: float,
     samples: int,
+    source_offset: float,
     on_progress: ProgressFn | None,
 ) -> list[_TrackPoint]:
     try:
@@ -148,7 +157,10 @@ def _analyse(
         for index, time in enumerate(sample_times, start=1):
             if on_progress is not None:
                 on_progress(min(0.85, index / max(1, len(sample_times) + 1)), "Tracking subject")
-            capture.set(cv2.CAP_PROP_POS_MSEC, max(0.0, time) * 1000.0)
+            capture.set(
+                cv2.CAP_PROP_POS_MSEC,
+                max(0.0, source_offset + time) * 1000.0,
+            )
             ok, frame = capture.read()
             if not ok or frame is None:
                 continue

@@ -1,7 +1,7 @@
 import { Clapperboard, Download, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { fetchProjects } from "../api/client";
+import { apiUrl, fetchProjects } from "../api/client";
 import type { ApiProject, ProductRoute } from "../models";
 
 export function ProjectsPage({ onNavigate }: { onNavigate: (route: ProductRoute) => void }) {
@@ -41,7 +41,7 @@ export function ProjectsPage({ onNavigate }: { onNavigate: (route: ProductRoute)
               <span>{project.status}</span>
             </button>
             <div><strong>{project.title}</strong><span>{project.clipCount} clips · {project.outputFormat} · {project.captionsEnabled ? "captions" : "clean"}</span><small>Updated {new Date(project.updatedAt * 1000).toLocaleString()}</small></div>
-            <footer><button onClick={() => openProject(project)}>Open</button>{project.downloadArtifactId && <a href={`/api/artifacts/${project.downloadArtifactId}/download`} download><Download size={14} /> Download</a>}</footer>
+            <footer><button onClick={() => openProject(project)}>Open</button>{project.downloadArtifactId && <a href={apiUrl(`/api/artifacts/${project.downloadArtifactId}/download`)} download><Download size={14} /> Download</a>}</footer>
           </article>
         ))}
       </div>

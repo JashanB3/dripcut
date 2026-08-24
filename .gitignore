@@ -12,6 +12,9 @@ dist/
 htmlcov/
 .DS_Store
 *.log
+.env
+.env.*
+!.env.example
 /workspace/
 /out/
 web/node_modules/

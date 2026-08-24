@@ -179,6 +179,35 @@ make clean
 Settings live at `~/Library/Application Support/DripCut/settings.json` (macOS) and can be
 overridden by environment variables:
 
+### Hosted transcription
+
+The web processing backend uses Groq `whisper-large-v3-turbo` as its primary speech
+provider when `GROQ_API_KEY` is configured. Credentials are read only by Python on the
+backend; never prefix the key with `VITE_`. If Groq is unavailable, the existing local
+Faster-Whisper provider remains the fallback.
+
+```bash
+cp .env.example .env
+# Set GROQ_API_KEY in .env, then restart the backend.
+```
+
+Transcripts are normalized and cached by source-content SHA-256, language, provider,
+model, and provider version. Re-importing the same bytes under a different filename still
+reuses the transcript.
+
+Run the repeatable pipeline benchmark with an approximately ten-minute spoken video:
+
+```bash
+source .venv/bin/activate
+python scripts/benchmark_pipeline.py /absolute/path/to/spoken-video.mp4 \
+  --clip-duration 30 --count 3 --output-format portrait --runs 2
+```
+
+The command reports source import, audio extraction, provider API, clip render, subtitle
+preparation, caption encoding, ZIP, and total times. The second run reports whether the
+transcript cache was hit. It exits with `CONFIGURATION REQUIRED` rather than presenting a
+local run as a Groq benchmark when the backend credential is missing.
+
 | Variable | Default |
 |---|---|
 | `DRIPCUT_HOME` | `~/Library/Application Support/DripCut` |
@@ -186,6 +215,8 @@ overridden by environment variables:
 | `DRIPCUT_PORT` | `7999` |
 | `DRIPCUT_HOST` | `127.0.0.1` |
 | `DRIPCUT_THEME` | `dark` |
+| `DRIPCUT_TRANSCRIPTION_PROVIDER` | `groq` |
+| `DRIPCUT_GROQ_TRANSCRIPTION_MODEL` | `whisper-large-v3-turbo` |
 | `DRIPCUT_WHISPER_MODEL` | `small` |
 | `DRIPCUT_OLLAMA_MODEL` | `qwen2.5:3b` |
 | `DRIPCUT_OLLAMA_HOST` | `http://127.0.0.1:11434` |
@@ -199,9 +230,10 @@ Logs are written to `<DRIPCUT_HOME>/logs/dripcut.log` with rotation.
 Verified against Gradio 6.20.0; the UI asks each Gradio signature what it accepts, so
 4.x and 5.x work too.
 
-DripCut makes no outbound network requests. The only socket it opens is to Ollama on
-`127.0.0.1:11434`, and only when AI features are used. Gradio runs with `share=False` bound
-to localhost. Telemetry is off and there is no code to turn it on.
+DripCut sends extracted speech audio to Groq only when hosted transcription is configured
+and captions/transcription are requested. It may also contact YouTube during an explicitly
+requested import and Ollama for enabled local analysis. Backend credentials are never sent
+to the React application or returned by diagnostics. Telemetry remains disabled.
 
 ## Licence
 

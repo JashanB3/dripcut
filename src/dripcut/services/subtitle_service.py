@@ -5,13 +5,16 @@ from __future__ import annotations
 import shutil
 import subprocess
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
 from dripcut.core.config import Settings
 from dripcut.core.errors import DependencyError, FFmpegError, ValidationError
 from dripcut.core.logging import get_logger
+from dripcut.engines.ffmpeg.runner import FFmpegRunner
 from dripcut.engines.subtitle.generator import Cue, SubtitleEngine
 from dripcut.engines.subtitle.styles import get_preset, preset_names
 from dripcut.engines.video.encode import EncodeSettings, Quality
@@ -53,6 +56,41 @@ class SubtitleService:
     def can_burn(self) -> bool:
         """True when this FFmpeg build can hardcode styled subtitles."""
         return self.video.runner.has_filter("subtitles") or _python_renderer_available()
+
+    def can_overlay(self) -> bool:
+        """True when timed PNG captions can be composited in the final FFmpeg pass."""
+        return self.video.runner.has_filter("overlay") and _python_renderer_available()
+
+    def prepare_overlays(
+        self,
+        transcript: Transcript,
+        destination: Path,
+        *,
+        style: CaptionStyle | None = None,
+        video_size: tuple[int, int] = (1920, 1080),
+    ) -> list[tuple[Path, float, float]]:
+        """Render one transparent caption image per cue for timed FFmpeg overlays."""
+        if transcript.is_empty:
+            return []
+        from PIL import Image, ImageDraw  # noqa: PLC0415
+
+        width, height = video_size
+        render_style = (style or CaptionStyle()).fitted_to_video(width, height)
+        cues = self.engine.build_cues(transcript, render_style)
+        font = _load_font(
+            render_style.font_name,
+            render_style.font_size,
+            bold=render_style.bold,
+        )
+        ensure_dir(destination)
+        overlays: list[tuple[Path, float, float]] = []
+        for index, cue in enumerate(cues, start=1):
+            image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            _draw_caption(ImageDraw.Draw(image), image.size, cue.text, render_style, font)
+            path = destination / f"caption-{index:03d}.png"
+            image.save(path, format="PNG", optimize=True)
+            overlays.append((path, cue.start, cue.end))
+        return overlays
 
     def write(
         self,
@@ -102,6 +140,7 @@ class SubtitleService:
         offset: float = 0.0,
         on_progress: ProgressFn | None = None,
         cancel_token: CancelToken | None = None,
+        timings: dict[str, float] | None = None,
     ) -> Path:
         """Burn captions into the picture.
 
@@ -116,6 +155,7 @@ class SubtitleService:
         caption_style = style or CaptionStyle()
         width, height = media.video.display_resolution if media.video else (1920, 1080)
         ass_path = destination.with_suffix(".dripcut.ass")
+        preparation_started = time.monotonic()
         self.engine.write(
             transcript,
             ass_path,
@@ -124,9 +164,14 @@ class SubtitleService:
             video_size=(width, height),
             offset=offset,
         )
+        if timings is not None:
+            timings["subtitle_preparation_seconds"] = round(
+                time.monotonic() - preparation_started, 3
+            )
+        encoding_started = time.monotonic()
         if not self.video.runner.has_filter("subtitles"):
             ass_path.unlink(missing_ok=True)
-            return self._burn_with_python(
+            rendered = self._burn_with_python(
                 media,
                 transcript,
                 destination,
@@ -136,8 +181,13 @@ class SubtitleService:
                 on_progress=on_progress,
                 cancel_token=cancel_token,
             )
+            if timings is not None:
+                timings["caption_encoding_seconds"] = round(
+                    time.monotonic() - encoding_started, 3
+                )
+            return rendered
         try:
-            return self.video.burn_subtitles(
+            rendered = self.video.burn_subtitles(
                 media.path,
                 destination,
                 ass_path,
@@ -147,6 +197,11 @@ class SubtitleService:
                 on_progress=on_progress,
                 cancel_token=cancel_token,
             )
+            if timings is not None:
+                timings["caption_encoding_seconds"] = round(
+                    time.monotonic() - encoding_started, 3
+                )
+            return rendered
         finally:
             ass_path.unlink(missing_ok=True)
 
@@ -221,7 +276,7 @@ class SubtitleService:
 
 
 def _stream_captioned_video(
-    runner: object,
+    runner: FFmpegRunner,
     media: MediaInfo,
     clip_cues: Sequence[Cue],
     destination: Path,
@@ -421,7 +476,7 @@ def _caption_video_args(
     ]
 
 
-def _caption_video_encoders(runner: object, destination: Path) -> list[str]:
+def _caption_video_encoders(runner: FFmpegRunner, destination: Path) -> list[str]:
     """Prefer hardware H.264 for caption renders, falling back to software."""
     container = destination.suffix.lstrip(".").lower()
     if container == "webm":
@@ -492,7 +547,7 @@ def _clip_cues(cues: Iterable[Cue], duration: float, offset: float) -> Iterable[
         )
 
 
-def _load_font(name: str, size: int, *, bold: bool) -> object:
+def _load_font(name: str, size: int, *, bold: bool) -> Any:
     """Find a usable local font for Pillow text rendering."""
     from PIL import ImageFont  # noqa: PLC0415
 
@@ -513,7 +568,13 @@ def _load_font(name: str, size: int, *, bold: bool) -> object:
     return ImageFont.load_default()
 
 
-def _draw_caption(draw: object, size: tuple[int, int], text: str, style: CaptionStyle, font: object) -> None:
+def _draw_caption(
+    draw: Any,
+    size: tuple[int, int],
+    text: str,
+    style: CaptionStyle,
+    font: Any,
+) -> None:
     """Draw one caption cue onto a Pillow image."""
     width, height = size
     lines = text.splitlines() or [text]

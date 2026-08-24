@@ -82,23 +82,156 @@ interface ProjectPayload {
 export class ApiError extends Error {
   hint?: string;
   code?: string;
+  status?: number;
+  details?: unknown;
 
-  constructor(message: string, hint?: string, code?: string) {
+  constructor(message: string, hint?: string, code?: string, status?: number, details?: unknown) {
     super(message);
     this.name = "ApiError";
     this.hint = hint;
     this.code = code;
+    this.status = status;
+    this.details = details;
   }
 }
 
-const errorFromResponse = async (response: Response) => {
-  try {
-    const payload = await response.json() as { message?: string; detail?: string; hint?: string; code?: string };
-    return new ApiError(payload.message || payload.detail || "DripCut could not complete that request.", payload.hint, payload.code);
-  } catch {
-    return new ApiError(`DripCut API returned ${response.status}.`, "Make sure the Python API is running on port 8000.");
-  }
+interface ErrorPayload {
+  message?: string;
+  detail?: string;
+  hint?: string;
+  code?: string;
+  request_id?: string;
+  error?: ErrorPayload;
+}
+
+const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim().replace(/\/$/, "");
+
+export function apiUrl(path: string): string {
+  if (configuredApiBase) return `${configuredApiBase}${path}`;
+  if (import.meta.env.DEV || typeof window === "undefined") return path;
+  throw new ApiError(
+    "The DripCut processing server is not configured.",
+    "Set VITE_API_BASE_URL to the public backend URL before building the frontend.",
+    "API_BASE_URL_MISSING",
+  );
+}
+
+const resolveApiUrl = (value?: string): string | undefined => {
+  if (!value || !value.startsWith("/api/")) return value;
+  return apiUrl(value);
 };
+
+function normalizeApiError(status: number, data: unknown): ApiError {
+  if (typeof data === "object" && data !== null) {
+    const outer = data as ErrorPayload;
+    const payload = outer.error ?? outer;
+    const requestHint = payload.request_id ? `Request ID: ${payload.request_id}` : undefined;
+    return new ApiError(
+      payload.message || payload.detail || `DripCut API returned ${status}.`,
+      payload.hint || requestHint,
+      payload.code,
+      status,
+      data,
+    );
+  }
+  if (typeof data === "string" && data.trim()) {
+    const isHtml = /<\s*!doctype|<\s*html/i.test(data);
+    return new ApiError(
+      isHtml ? "The server returned an invalid response. Please try again." : data.trim(),
+      undefined,
+      isHtml ? "INVALID_SERVER_RESPONSE" : undefined,
+      status,
+      data,
+    );
+  }
+  return new ApiError(
+    "The server returned an empty response.",
+    "Please try again. If this continues, restart the DripCut processing server.",
+    "EMPTY_SERVER_RESPONSE",
+    status,
+  );
+}
+
+export async function parseApiResponse(response: Response): Promise<unknown | null> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  const text = await response.text();
+  let data: unknown = null;
+
+  if (text && contentType.includes("application/json")) {
+    try {
+      data = JSON.parse(text) as unknown;
+    } catch {
+      throw new ApiError(
+        "The server returned an invalid response. Please try again.",
+        undefined,
+        "INVALID_JSON_RESPONSE",
+        response.status,
+        import.meta.env.DEV ? text : undefined,
+      );
+    }
+  } else if (text) {
+    data = text;
+  }
+
+  if (!response.ok) throw normalizeApiError(response.status, data);
+  if (response.status === 204) return null;
+  if (!text) {
+    throw new ApiError(
+      "The server returned an empty response.",
+      "Please try again. If this continues, restart the DripCut processing server.",
+      "EMPTY_SERVER_RESPONSE",
+      response.status,
+    );
+  }
+  if (!contentType.includes("application/json")) {
+    throw new ApiError(
+      "The server returned an invalid response. Please try again.",
+      undefined,
+      "UNEXPECTED_CONTENT_TYPE",
+      response.status,
+      import.meta.env.DEV ? data : undefined,
+    );
+  }
+  return data;
+}
+
+export async function requestJson<T>(path: string, init: RequestInit = {}, timeoutMs = 15_000): Promise<T> {
+  const method = init.method ?? "GET";
+  const startedAt = performance.now();
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(apiUrl(path), { ...init, signal: controller.signal });
+    if (import.meta.env.DEV) {
+      console.debug("[DripCut API]", {
+        method,
+        endpoint: path.split("?")[0],
+        status: response.status,
+        contentType: response.headers.get("content-type") ?? "",
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    }
+    return await parseApiResponse(response) as T;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError(
+        "The DripCut processing server took too long to respond.",
+        "The render may still be running. DripCut will retry automatically.",
+        "REQUEST_TIMEOUT",
+      );
+    }
+    throw new ApiError(
+      "Unable to reach the DripCut processing server.",
+      "Check that the backend is running and try again.",
+      "NETWORK_ERROR",
+      undefined,
+      import.meta.env.DEV ? error : undefined,
+    );
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
+}
 
 const sourceFromPayload = (payload: SourcePayload): SourceAsset => ({
   id: payload.id,
@@ -110,9 +243,9 @@ const sourceFromPayload = (payload: SourcePayload): SourceAsset => ({
   mimeType: payload.mime_type,
   sizeBytes: payload.size_bytes,
   youtubeUrl: payload.youtube_url,
-  thumbnailUrl: payload.poster_url,
+  thumbnailUrl: resolveApiUrl(payload.poster_url),
   channel: payload.channel,
-  mediaUrl: payload.media_url,
+  mediaUrl: resolveApiUrl(payload.media_url) ?? payload.media_url,
   projectId: payload.project_id,
 });
 
@@ -127,8 +260,8 @@ const artifactFromPayload = (payload: ArtifactPayload): ApiArtifact => ({
   duration: payload.duration,
   outputFormat: payload.output_format ?? "source",
   captionsEnabled: payload.captions_enabled ?? false,
-  streamUrl: payload.stream_url,
-  downloadUrl: payload.download_url,
+  streamUrl: resolveApiUrl(payload.stream_url),
+  downloadUrl: resolveApiUrl(payload.download_url) ?? payload.download_url,
 });
 
 const jobFromPayload = (payload: JobPayload): ApiJob => ({
@@ -150,18 +283,37 @@ const jobFromPayload = (payload: JobPayload): ApiJob => ({
 export async function uploadSource(file: File, onProgress?: (percent: number) => void): Promise<SourceAsset> {
   return await new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open("POST", "/api/sources/upload");
-    request.responseType = "json";
+    try {
+      request.open("POST", apiUrl("/api/sources/upload"));
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    request.responseType = "text";
+    request.timeout = 120_000;
     request.upload.onprogress = (event) => {
       if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
     };
-    request.onerror = () => reject(new ApiError("The upload could not reach DripCut.", "Start the Python API and try again."));
+    request.onerror = () => reject(new ApiError("Unable to reach the DripCut processing server.", "Check that the backend is running and try again.", "NETWORK_ERROR"));
+    request.ontimeout = () => reject(new ApiError("The video upload took too long.", "Try a smaller file or check the connection to the processing server.", "REQUEST_TIMEOUT"));
     request.onload = () => {
+      let payload: SourcePayload | ErrorPayload | null = null;
+      if (request.responseText) {
+        try {
+          payload = JSON.parse(request.responseText) as SourcePayload | ErrorPayload;
+        } catch {
+          reject(new ApiError("The server returned an invalid response. Please try again.", undefined, "INVALID_JSON_RESPONSE", request.status));
+          return;
+        }
+      }
       if (request.status >= 200 && request.status < 300) {
-        resolve(sourceFromPayload(request.response as SourcePayload));
+        if (!payload) {
+          reject(new ApiError("The server returned an empty response.", undefined, "EMPTY_SERVER_RESPONSE", request.status));
+          return;
+        }
+        resolve(sourceFromPayload(payload as SourcePayload));
       } else {
-        const payload = request.response as { message?: string; detail?: string; hint?: string } | null;
-        reject(new ApiError(payload?.message || payload?.detail || "DripCut could not import this video.", payload?.hint));
+        reject(normalizeApiError(request.status, payload));
       }
     };
     const body = new FormData();
@@ -175,13 +327,11 @@ export async function importYouTube(
   rightsConfirmed: boolean,
   onProgress?: (percent: number, stage: string) => void,
 ): Promise<SourceAsset> {
-  const response = await fetch("/api/jobs/youtube", {
+  let job = jobFromPayload(await requestJson<JobPayload>("/api/jobs/youtube", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, rights_confirmed: rightsConfirmed }),
-  });
-  if (!response.ok) throw await errorFromResponse(response);
-  let job = jobFromPayload(await response.json() as JobPayload);
+  }, 30_000));
   onProgress?.(job.percent, job.stage);
   while (job.status === "queued" || job.status === "running") {
     await new Promise((resolve) => window.setTimeout(resolve, 500));
@@ -195,9 +345,7 @@ export async function importYouTube(
       job.errorCode,
     );
   }
-  const source = await fetch(`/api/sources/${encodeURIComponent(job.sourceId)}`, { cache: "no-store" });
-  if (!source.ok) throw await errorFromResponse(source);
-  return sourceFromPayload(await source.json() as SourcePayload);
+  return sourceFromPayload(await requestJson<SourcePayload>(`/api/sources/${encodeURIComponent(job.sourceId)}`, { cache: "no-store" }));
 }
 
 export async function createClipJob(
@@ -209,21 +357,20 @@ export async function createClipJob(
     platforms: Platform[];
   },
 ): Promise<ApiJob> {
-  const response = await fetch("/api/jobs/clips", {
+  const payload = await requestJson<JobPayload>("/api/jobs/clips", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       source_id: sourceId,
       segments,
       output_format: options.outputFormat,
-      portrait_mode: "ai_tracking",
+      portrait_mode: "center_crop",
       auto_captions: options.autoCaptions,
       platforms: options.platforms,
       fast_mode: true,
     }),
-  });
-  if (!response.ok) throw await errorFromResponse(response);
-  return jobFromPayload(await response.json() as JobPayload);
+  }, 30_000);
+  return jobFromPayload(payload);
 }
 
 const projectFromPayload = (payload: ProjectPayload): ApiProject => ({
@@ -248,17 +395,14 @@ const projectFromPayload = (payload: ProjectPayload): ApiProject => ({
 });
 
 export async function fetchProjects(limit = 20): Promise<ApiProject[]> {
-  const response = await fetch(`/api/projects?limit=${limit}`, { cache: "no-store" });
-  if (!response.ok) throw await errorFromResponse(response);
-  return (await response.json() as ProjectPayload[]).map(projectFromPayload);
+  return (await requestJson<ProjectPayload[]>(`/api/projects?limit=${limit}`, { cache: "no-store" })).map(projectFromPayload);
 }
 
 export async function getProject(projectId: string): Promise<ApiProject> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+  const payload = await requestJson<ProjectPayload>(`/api/projects/${encodeURIComponent(projectId)}`, {
     cache: "no-store",
   });
-  if (!response.ok) throw await errorFromResponse(response);
-  return projectFromPayload(await response.json() as ProjectPayload);
+  return projectFromPayload(payload);
 }
 
 export async function createThumbnailCandidates(
@@ -266,30 +410,27 @@ export async function createThumbnailCandidates(
   prompt: string,
   target: Platform,
 ): Promise<ApiArtifact[]> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/thumbnails`, {
+  const payload = await requestJson<ArtifactPayload[]>(`/api/projects/${encodeURIComponent(projectId)}/thumbnails`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt, target }),
   });
-  if (!response.ok) throw await errorFromResponse(response);
-  return (await response.json() as ArtifactPayload[]).map(artifactFromPayload);
+  return payload.map(artifactFromPayload);
 }
 
 export async function createAIEditPlan(sourceId: string, prompt: string): Promise<AIEditPlan> {
-  const response = await fetch("/api/ai/edit-plan", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source_id: sourceId, prompt }),
-  });
-  if (!response.ok) throw await errorFromResponse(response);
-  const payload = await response.json() as {
+  const payload = await requestJson<{
     source_id: string;
     summary: string;
     actions: AIEditPlan["actions"];
     segments: Array<{ id: string; index: number; start: number; end: number; strategy: "standard" | "ai" }>;
     output_format: OutputFormat;
     auto_captions: boolean;
-  };
+  }>("/api/ai/edit-plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source_id: sourceId, prompt }),
+  });
   return {
     sourceId: payload.source_id,
     summary: payload.summary,
@@ -301,11 +442,9 @@ export async function createAIEditPlan(sourceId: string, prompt: string): Promis
 }
 
 export async function fetchSocialConnections(): Promise<SocialConnection[]> {
-  const response = await fetch("/api/social/connections", { cache: "no-store" });
-  if (!response.ok) throw await errorFromResponse(response);
-  const payload = await response.json() as Array<{
+  const payload = await requestJson<Array<{
     platform: Platform; label: string; connected: boolean; configured: boolean; detail: string; setup_hint: string;
-  }>;
+  }>>("/api/social/connections", { cache: "no-store" });
   return payload.map((item) => ({ ...item, setupHint: item.setup_hint }));
 }
 
@@ -316,7 +455,11 @@ export async function saveSchedule(input: {
   startAt: string;
   caption: string;
 }): Promise<SavedSchedule> {
-  const response = await fetch("/api/schedules", {
+  const payload = await requestJson<{
+    id: string; project_id: string; archive_name: string; created_at: number;
+    posts: Array<{ platform: Platform; clip_name: string; publish_at: string; caption: string; status: string }>;
+    publish_ready: boolean;
+  }>("/api/schedules", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -327,12 +470,6 @@ export async function saveSchedule(input: {
       caption: input.caption,
     }),
   });
-  if (!response.ok) throw await errorFromResponse(response);
-  const payload = await response.json() as {
-    id: string; project_id: string; archive_name: string; created_at: number;
-    posts: Array<{ platform: Platform; clip_name: string; publish_at: string; caption: string; status: string }>;
-    publish_ready: boolean;
-  };
   return {
     id: payload.id,
     projectId: payload.project_id,
@@ -350,7 +487,5 @@ export async function saveSchedule(input: {
 }
 
 export async function getClipJob(jobId: string): Promise<ApiJob> {
-  const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
-  if (!response.ok) throw await errorFromResponse(response);
-  return jobFromPayload(await response.json() as JobPayload);
+  return jobFromPayload(await requestJson<JobPayload>(`/api/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" }));
 }

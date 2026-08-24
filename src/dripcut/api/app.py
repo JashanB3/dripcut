@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import logging
+import os
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
-from fastapi import FastAPI, File, Query, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from dripcut.api.contracts import (
     AIEditPlanRequest,
     AIEditPlanResponse,
     ArtifactResponse,
+    ErrorDetail,
     ErrorResponse,
     HealthResponse,
     JobResponse,
@@ -36,6 +41,35 @@ from dripcut.api.stores import LocalArtifactStore, LocalSourceAssetStore, QueueJ
 from dripcut.core.bootstrap import build_container
 from dripcut.core.container import ServiceContainer
 from dripcut.core.errors import DripCutError
+
+logger = logging.getLogger(__name__)
+
+
+def _request_headers(
+    request: Request, headers: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    result = dict(headers or {})
+    result["x-request-id"] = getattr(request.state, "request_id", "unknown")
+    return result
+
+
+def _error_content(
+    *,
+    code: str,
+    message: str,
+    request: Request,
+    hint: str | None = None,
+    details: object | list[object] | None = None,
+) -> dict[str, object]:
+    return ErrorResponse(
+        error=ErrorDetail(
+            code=code,
+            message=message,
+            hint=hint,
+            details=details,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    ).model_dump(exclude_none=True)
 
 
 def build_service(container: ServiceContainer | None = None) -> WebClipService:
@@ -61,23 +95,88 @@ def create_app(service: WebClipService | None = None) -> FastAPI:
 
     app = FastAPI(title="DripCut API", version="1.0.0", lifespan=lifespan)
     app.state.clip_service = clip_service
+    allowed_origins = [
+        value.strip()
+        for value in os.environ.get(
+            "DRIPCUT_CORS_ORIGINS",
+            "http://127.0.0.1:5173,http://localhost:5173",
+        ).split(",")
+        if value.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def request_context(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        request.state.request_id = request.headers.get("x-request-id") or uuid4().hex
+        response = await call_next(request)
+        response.headers["x-request-id"] = request.state.request_id
+        return response
+
     @app.exception_handler(DripCutError)
-    async def dripcut_error(_: Request, error: DripCutError) -> JSONResponse:
+    async def dripcut_error(request: Request, error: DripCutError) -> JSONResponse:
         return JSONResponse(
             status_code=400,
-            content=ErrorResponse(
+            headers=_request_headers(request),
+            content=_error_content(
+                request=request,
                 message=error.message,
                 hint=error.hint,
-                code=getattr(error, "code", None),
-            ).model_dump(exclude_none=True),
+                code=getattr(error, "code", error.__class__.__name__.upper()),
+            ),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            headers=_request_headers(request),
+            content=_error_content(
+                request=request,
+                code="VALIDATION_ERROR",
+                message="The request contains invalid or missing information.",
+                details=error.errors(),
+            ),
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_error(request: Request, error: HTTPException) -> JSONResponse:
+        message = error.detail if isinstance(error.detail, str) else "The requested operation could not be completed."
+        return JSONResponse(
+            status_code=error.status_code,
+            headers=_request_headers(request, error.headers),
+            content=_error_content(
+                request=request,
+                code=f"HTTP_{error.status_code}",
+                message=message,
+                details=None if isinstance(error.detail, str) else error.detail,
+            ),
+        )
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request: Request, error: Exception) -> JSONResponse:
+        logger.exception(
+            "Unhandled API error request_id=%s method=%s path=%s",
+            getattr(request.state, "request_id", "unknown"),
+            request.method,
+            request.url.path,
+            exc_info=error,
+        )
+        return JSONResponse(
+            status_code=500,
+            headers=_request_headers(request),
+            content=_error_content(
+                request=request,
+                code="INTERNAL_SERVER_ERROR",
+                message="Something went wrong while processing this request.",
+            ),
         )
 
     @app.get("/api/health", response_model=HealthResponse)

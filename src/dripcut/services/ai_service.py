@@ -2,20 +2,27 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
 from dripcut.core.config import Settings
-from dripcut.core.errors import ModelUnavailableError
+from dripcut.core.errors import ModelUnavailableError, TranscriptionError
 from dripcut.core.events import EventBus, EventName
 from dripcut.core.logging import get_logger
 from dripcut.core.paths import AppPaths
 from dripcut.engines.ai.analysis import AnalysisEngine, Chapter, Highlight, Hook
 from dripcut.engines.ai.llm import OllamaClient
 from dripcut.engines.ai.transcription import TranscriptionEngine
+from dripcut.engines.ai.transcription_provider import (
+    GroqTranscriptionProvider,
+    LocalTranscriptionProvider,
+    TranscriptionProvider,
+)
 from dripcut.models.transcript import Transcript
-from dripcut.utils.concurrency import CancelToken
+from dripcut.utils.concurrency import CancelToken, OperationCancelled
 from dripcut.utils.fs import ensure_dir
 
 __all__ = ["AIService"]
@@ -40,6 +47,7 @@ class AIService:
         events: EventBus,
         settings: Settings,
         paths: AppPaths,
+        groq_transcription: GroqTranscriptionProvider | None = None,
     ) -> None:
         self.transcription = transcription
         self.analysis = analysis
@@ -47,7 +55,10 @@ class AIService:
         self.events = events
         self.settings = settings
         self.paths = paths
+        self.local_transcription = LocalTranscriptionProvider(transcription)
+        self.groq_transcription = groq_transcription
         self._lock = threading.Lock()
+        self._hashes: dict[tuple[str, int, int], str] = {}
 
     # ------------------------------------------------------------------- status
 
@@ -64,6 +75,11 @@ class AIService:
             "whisper_installed": self.transcription.available(),
             "whisper_model": self.settings.ai.whisper_model,
             "whisper_loaded": self.transcription.loaded,
+            "transcription_provider_requested": self.settings.ai.transcription_provider,
+            "transcription_provider_active": self.active_transcription_provider.name,
+            "groq_configured": bool(
+                self.groq_transcription and self.groq_transcription.available()
+            ),
             "ollama_up": server_up,
             "ollama_model": self.settings.ai.ollama_model,
             "ollama_model_installed": self.llm.has_model() if server_up else False,
@@ -78,17 +94,43 @@ class AIService:
 
     # -------------------------------------------------------------- transcription
 
-    def cache_path(self, source: Path) -> Path:
-        """Where the transcript for ``source`` is cached."""
-        stat = source.stat() if source.exists() else None
-        stamp = f"{int(stat.st_mtime)}-{stat.st_size}" if stat else "unknown"
-        directory = ensure_dir(self.paths.cache / "transcripts")
-        model = self.settings.ai.whisper_model.replace(".", "_")
-        return directory / f"{source.stem}-{stamp}-{model}.json"
+    @property
+    def active_transcription_provider(self) -> TranscriptionProvider:
+        """Resolve the configured provider without exposing backend credentials."""
+        requested = self.settings.ai.transcription_provider
+        if requested in {"groq", "auto"}:
+            if self.groq_transcription and self.groq_transcription.available():
+                return self.groq_transcription
+            if requested == "groq":
+                _log.warning("Groq transcription is unavailable; using local Whisper")
+        return self.local_transcription
 
-    def cached_transcript(self, source: Path) -> Transcript | None:
+    def cache_path(
+        self,
+        source: Path,
+        provider: TranscriptionProvider | None = None,
+        *,
+        language: str | None = None,
+    ) -> Path:
+        """Where the transcript for ``source`` is cached."""
+        self._sync_transcription_settings()
+        selected = provider or self.active_transcription_provider
+        content_hash = self._content_hash(source) if source.exists() else "unknown"
+        directory = ensure_dir(self.paths.cache / "transcripts")
+        language_key = (language or self.settings.ai.whisper_language or "auto").replace("/", "_")
+        identity = f"{selected.name}-{selected.model}-{selected.version}-{language_key}"
+        safe_identity = "".join(char if char.isalnum() or char in "-_" else "_" for char in identity)
+        return directory / f"{content_hash}-{safe_identity}.json"
+
+    def cached_transcript(
+        self,
+        source: Path,
+        provider: TranscriptionProvider | None = None,
+        *,
+        language: str | None = None,
+    ) -> Transcript | None:
         """Return a cached transcript for ``source``, or ``None``."""
-        path = self.cache_path(Path(source))
+        path = self.cache_path(Path(source), provider, language=language)
         if not path.exists():
             return None
         try:
@@ -103,29 +145,71 @@ class AIService:
         *,
         force: bool = False,
         initial_prompt: str = "",
+        source_asset_id: str = "",
         on_progress: ProgressFn | None = None,
         cancel_token: CancelToken | None = None,
     ) -> Transcript:
         """Transcribe a file, reusing the cache unless ``force`` is set."""
         media_path = Path(source).expanduser()
+        self._sync_transcription_settings()
+        provider = self.active_transcription_provider
+        language = self.settings.ai.whisper_language
         if not force:
-            cached = self.cached_transcript(media_path)
+            cached = self.cached_transcript(media_path, provider, language=language)
             if cached is not None:
                 _log.info("using cached transcript for %s", media_path.name)
+                cached.metadata["cache_hit"] = True
+                cached.metadata["cache_path"] = str(
+                    self.cache_path(media_path, provider, language=language)
+                )
                 if on_progress:
                     on_progress(1.0, "Transcript loaded from cache")
                 return cached
 
-        self._sync_transcription_settings()
-        with self._lock:  # one Whisper run at a time: the model is not re-entrant
-            transcript = self.transcription.transcribe(
+        started = time.monotonic()
+        try:
+            transcript = self._run_provider(
+                provider,
                 media_path,
                 initial_prompt=initial_prompt,
                 on_progress=on_progress,
                 cancel_token=cancel_token,
             )
+        except (ModelUnavailableError, TranscriptionError) as error:
+            if not provider.remote or isinstance(error, OperationCancelled):
+                raise
+            _log.warning("%s transcription failed; using local Whisper", provider.name)
+            provider = self.local_transcription
+            if not force:
+                cached = self.cached_transcript(media_path, provider, language=language)
+                if cached is not None:
+                    cached.metadata["cache_hit"] = True
+                    cached.metadata["fallback_from"] = "groq"
+                    cached.metadata["cache_path"] = str(
+                        self.cache_path(media_path, provider, language=language)
+                    )
+                    if on_progress:
+                        on_progress(1.0, "Local transcript loaded from cache")
+                    return cached
+            transcript = self._run_provider(
+                provider,
+                media_path,
+                initial_prompt=initial_prompt,
+                on_progress=on_progress,
+                cancel_token=cancel_token,
+            )
+            transcript.metadata["fallback_from"] = "groq"
+        transcript.source_asset_id = source_asset_id
+        transcript.provider = provider.name
+        transcript.model = provider.model
+        transcript.metadata["cache_hit"] = False
+        transcript.metadata["transcription_total_seconds"] = round(
+            time.monotonic() - started, 3
+        )
+        cache_path = self.cache_path(media_path, provider, language=language)
+        transcript.metadata["cache_path"] = str(cache_path)
         try:
-            transcript.save(self.cache_path(media_path))
+            transcript.save(cache_path)
         except OSError:
             _log.debug("could not cache transcript", exc_info=True)
         self.events.publish(
@@ -135,6 +219,46 @@ class AIService:
             language=transcript.language,
         )
         return transcript
+
+    def _run_provider(
+        self,
+        provider: TranscriptionProvider,
+        media_path: Path,
+        *,
+        initial_prompt: str,
+        on_progress: ProgressFn | None,
+        cancel_token: CancelToken | None,
+    ) -> Transcript:
+        if provider.remote:
+            return provider.transcribe(
+                media_path,
+                initial_prompt=initial_prompt,
+                language=self.settings.ai.whisper_language,
+                on_progress=on_progress,
+                cancel_token=cancel_token,
+            )
+        with self._lock:  # faster-whisper's loaded model is not re-entrant
+            return provider.transcribe(
+                media_path,
+                initial_prompt=initial_prompt,
+                language=self.settings.ai.whisper_language,
+                on_progress=on_progress,
+                cancel_token=cancel_token,
+            )
+
+    def _content_hash(self, source: Path) -> str:
+        stat = source.stat()
+        key = (str(source.resolve()), stat.st_size, stat.st_mtime_ns)
+        cached = self._hashes.get(key)
+        if cached:
+            return cached
+        digest = hashlib.sha256()
+        with source.open("rb") as handle:
+            while block := handle.read(4 * 1024 * 1024):
+                digest.update(block)
+        value = digest.hexdigest()
+        self._hashes[key] = value
+        return value
 
     # ------------------------------------------------------------------ analysis
 

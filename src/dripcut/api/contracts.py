@@ -7,10 +7,16 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-class ErrorResponse(BaseModel):
+class ErrorDetail(BaseModel):
     message: str
     hint: str | None = None
     code: str | None = None
+    details: object | list[object] | None = None
+    request_id: str | None = None
+
+
+class ErrorResponse(BaseModel):
+    error: ErrorDetail
 
 
 class SourceAssetResponse(BaseModel):

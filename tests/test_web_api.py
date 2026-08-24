@@ -118,6 +118,15 @@ def test_standard_plan_drops_incomplete_tail(container, sample_video: Path) -> N
 def test_portrait_caption_render_updates_project(
     container, sample_video: Path, monkeypatch
 ) -> None:
+    class RemoteProvider:
+        name = "groq"
+        model = "test-whisper"
+        version = "1"
+        remote = True
+
+        def available(self) -> bool:
+            return True
+
     transcript = Transcript(
         source=sample_video,
         language="en",
@@ -131,6 +140,8 @@ def test_portrait_caption_render_updates_project(
             )
         ],
     )
+    container.ai.groq_transcription = RemoteProvider()
+    container.settings.ai.transcription_provider = "groq"
     monkeypatch.setattr(container.ai, "transcribe", lambda *_args, **_kwargs: transcript)
     service = build_service(container)
     app = create_app(service)
@@ -164,6 +175,14 @@ def test_portrait_caption_render_updates_project(
     assert project["clip_count"] == 1
     assert project["captions_enabled"] is True
     assert project["download_artifact_id"] == finished["zip_artifact"]["id"]
+    job = service.jobs.get(finished["id"])
+    assert job is not None and job.result is not None
+    timings = job.result.data["pipeline_timings"]
+    assert timings["clip_render_seconds"] >= 0
+    assert timings["subtitle_preparation_seconds"] >= 0
+    assert timings["single_pass_caption_render"] is True
+    assert timings["caption_encoding_in_final_pass"] is True
+    assert timings["final_render_seconds"] >= 0
 
     with TestClient(app) as client:
         thumbnails = client.post(
@@ -227,10 +246,11 @@ def test_invalid_youtube_url_returns_a_useful_error(container) -> None:
     with TestClient(app) as client:
         response = client.post("/api/sources/youtube", json={"url": "https://example.com/video"})
     assert response.status_code == 400
-    assert response.json() == {
-        "message": "That is not a supported YouTube link.",
-        "hint": "Use a youtube.com or youtu.be video URL.",
-    }
+    error = response.json()["error"]
+    assert error["message"] == "That is not a supported YouTube link."
+    assert error["hint"] == "Use a youtube.com or youtu.be video URL."
+    assert error["code"] == "VALIDATIONERROR"
+    assert error["request_id"] == response.headers["x-request-id"]
 
 
 def test_youtube_diagnostics_are_safe_for_operator_visibility(container) -> None:
@@ -322,4 +342,35 @@ def test_youtube_import_requires_content_rights_confirmation(container) -> None:
         )
 
     assert response.status_code == 400
-    assert "permission" in response.json()["message"].lower()
+    assert "permission" in response.json()["error"]["message"].lower()
+
+
+def test_validation_errors_use_the_stable_json_contract(container) -> None:
+    app = create_app(build_service(container))
+    with TestClient(app) as client:
+        response = client.post("/api/jobs/clips", json={})
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert response.json()["error"]["details"]
+    assert response.json()["error"]["request_id"] == response.headers["x-request-id"]
+
+
+def test_unexpected_errors_return_safe_json(container, monkeypatch) -> None:
+    service = build_service(container)
+
+    def fail(*, limit=None):
+        del limit
+        raise RuntimeError("private implementation detail")
+
+    monkeypatch.setattr(service, "list_projects", fail)
+    app = create_app(service)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/projects")
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["error"]["code"] == "INTERNAL_SERVER_ERROR"
+    assert "private implementation detail" not in response.text
+    assert response.json()["error"]["request_id"] == response.headers["x-request-id"]

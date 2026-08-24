@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -93,8 +94,12 @@ class Transcript:
     language: str
     duration: float
     segments: list[TranscriptSegment] = field(default_factory=list)
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    source_asset_id: str = ""
+    provider: str = "local"
     model: str = ""
     created_at: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def text(self) -> str:
@@ -131,6 +136,45 @@ class Transcript:
         """Spoken text inside a window, used to caption and title a clip."""
         return " ".join(s.text.strip() for s in self.slice(start, end)).strip()
 
+    def window(self, start: float, end: float) -> Transcript:
+        """Return only transcript content inside a clip, rebased to clip time."""
+        start = max(0.0, float(start))
+        end = max(start, float(end))
+        clipped: list[TranscriptSegment] = []
+        for segment in self.slice(start, end):
+            words = tuple(
+                Word(
+                    text=word.text,
+                    start=max(0.0, word.start - start),
+                    end=min(end - start, max(0.0, word.end - start)),
+                    probability=word.probability,
+                )
+                for word in segment.words
+                if word.end > start and word.start < end
+            )
+            text = " ".join(word.text for word in words).strip() or segment.text
+            clipped.append(
+                TranscriptSegment(
+                    index=len(clipped),
+                    start=max(0.0, segment.start - start),
+                    end=min(end - start, max(0.0, segment.end - start)),
+                    text=text,
+                    words=words,
+                    no_speech_prob=segment.no_speech_prob,
+                )
+            )
+        return Transcript(
+            source=self.source,
+            language=self.language,
+            duration=end - start,
+            segments=clipped,
+            source_asset_id=self.source_asset_id,
+            provider=self.provider,
+            model=self.model,
+            created_at=self.created_at,
+            metadata=dict(self.metadata),
+        )
+
     def rebased(self, offset: float) -> Transcript:
         """Return a copy with all timings shifted by ``-offset`` (clip-relative)."""
         shifted: list[TranscriptSegment] = []
@@ -153,8 +197,12 @@ class Transcript:
             language=self.language,
             duration=self.duration,
             segments=shifted,
+            id=self.id,
+            source_asset_id=self.source_asset_id,
+            provider=self.provider,
             model=self.model,
             created_at=self.created_at,
+            metadata=dict(self.metadata),
         )
 
     def numbered_lines(self, *, limit: int | None = None) -> str:
@@ -170,10 +218,14 @@ class Transcript:
         """JSON-friendly representation."""
         return {
             "source": str(self.source),
+            "id": self.id,
+            "source_asset_id": self.source_asset_id,
             "language": self.language,
             "duration": round(self.duration, 3),
+            "provider": self.provider,
             "model": self.model,
             "created_at": self.created_at,
+            "metadata": self.metadata,
             "segments": [segment.to_dict() for segment in self.segments],
         }
 
@@ -182,11 +234,15 @@ class Transcript:
         """Rebuild from cached JSON."""
         return cls(
             source=Path(data.get("source", "")),
+            id=str(data.get("id", "") or uuid.uuid4().hex),
+            source_asset_id=str(data.get("source_asset_id", "")),
             language=str(data.get("language", "")),
             duration=float(data.get("duration", 0.0)),
             segments=[TranscriptSegment.from_dict(item) for item in data.get("segments", [])],
+            provider=str(data.get("provider", "local")),
             model=str(data.get("model", "")),
             created_at=float(data.get("created_at", 0.0)),
+            metadata=dict(data.get("metadata", {})),
         )
 
     def save(self, path: Path) -> Path:
