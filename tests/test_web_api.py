@@ -40,6 +40,28 @@ def test_health_reports_media_dependencies(container) -> None:
     assert response.json() == {"status": "ok", "ffmpeg": True, "ffprobe": True}
 
 
+def test_production_allowed_origins_env(container, monkeypatch) -> None:
+    monkeypatch.setenv(
+        "DRIPCUT_ALLOWED_ORIGINS",
+        "https://dripcut.example, https://studio.dripcut.example ",
+    )
+    app = create_app(build_service(container))
+
+    with TestClient(app) as client:
+        response = client.options(
+            "/api/health",
+            headers={
+                "Origin": "https://studio.dripcut.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == (
+        "https://studio.dripcut.example"
+    )
+
+
 def test_upload_plan_render_stream_and_download(container, sample_video: Path) -> None:
     app = create_app(build_service(container))
     with TestClient(app) as client:

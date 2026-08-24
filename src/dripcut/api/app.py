@@ -45,6 +45,15 @@ from dripcut.core.errors import DripCutError
 logger = logging.getLogger(__name__)
 
 
+def _allowed_origins() -> list[str]:
+    """Resolve production CORS origins while retaining the local variable name."""
+    configured = os.environ.get("DRIPCUT_ALLOWED_ORIGINS") or os.environ.get(
+        "DRIPCUT_CORS_ORIGINS",
+        "http://127.0.0.1:5173,http://localhost:5173",
+    )
+    return [value.strip() for value in configured.split(",") if value.strip()]
+
+
 def _request_headers(
     request: Request, headers: Mapping[str, str] | None = None
 ) -> dict[str, str]:
@@ -95,17 +104,9 @@ def create_app(service: WebClipService | None = None) -> FastAPI:
 
     app = FastAPI(title="DripCut API", version="1.0.0", lifespan=lifespan)
     app.state.clip_service = clip_service
-    allowed_origins = [
-        value.strip()
-        for value in os.environ.get(
-            "DRIPCUT_CORS_ORIGINS",
-            "http://127.0.0.1:5173,http://localhost:5173",
-        ).split(",")
-        if value.strip()
-    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=allowed_origins,
+        allow_origins=_allowed_origins(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

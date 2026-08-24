@@ -225,6 +225,52 @@ local run as a Groq benchmark when the backend credential is missing.
 
 Logs are written to `<DRIPCUT_HOME>/logs/dripcut.log` with rotation.
 
+## Render deployment
+
+The repository includes a production `Dockerfile` for the Python processing API. It
+installs FFmpeg/FFprobe, yt-dlp with EJS support, and Node 22, runs as a non-root user,
+and binds Uvicorn to Render's `PORT`. The React frontend is deployed separately as a
+static site.
+
+Build and run the same image locally:
+
+```bash
+docker build -t dripcut-api .
+docker run --rm -p 10000:10000 --env-file .env -e PORT=10000 dripcut-api
+curl http://127.0.0.1:10000/api/health
+```
+
+Create a Render **Web Service** with these settings:
+
+| Setting | Value |
+|---|---|
+| Runtime | Docker |
+| Branch | `main` |
+| Root directory | repository root (leave blank) |
+| Dockerfile path | `./Dockerfile` |
+| Health check path | `/api/health` |
+
+Configure these backend environment variables in Render, not in the image or repository:
+
+| Variable | Recommended value |
+|---|---|
+| `GROQ_API_KEY` | Render secret containing the Groq key |
+| `DRIPCUT_TRANSCRIPTION_PROVIDER` | `groq` |
+| `DRIPCUT_ALLOWED_ORIGINS` | exact deployed frontend origin, such as `https://dripcut.example` |
+| `DRIPCUT_MAX_WORKERS` | `1` for a 512 MB instance |
+| `DRIPCUT_HOME` | `/var/lib/dripcut` |
+
+Set `VITE_API_BASE_URL=https://<your-backend>.onrender.com` on the frontend static site
+before building it. Do not expose `GROQ_API_KEY` through a `VITE_` variable.
+
+Render instances without a persistent disk have ephemeral storage. Uploaded/imported
+sources, rendered clips, transcript caches, ZIP archives, projects, job history, and
+schedules stored under `DRIPCUT_HOME` can disappear after a restart or redeploy. This is
+acceptable for a download-first beta, but durable multi-user deployment requires object
+storage and a persistent database. The 512 MB tier should run one render job at a time;
+Groq transcription is strongly recommended because local Faster-Whisper can exceed that
+memory budget.
+
 ## Privacy
 
 Verified against Gradio 6.20.0; the UI asks each Gradio signature what it accepts, so
