@@ -116,12 +116,19 @@ class YouTubeDiagnosticsResponse(BaseModel):
     ffprobe_available: bool
     js_runtime: str | None
     js_runtime_version: str | None
+    node_available: bool
     ejs_version: str | None
+    js_challenge_support_active: bool
     po_token_provider_available: bool
     po_token_provider_configured: bool
     cookie_fallback_configured: bool
     proxy_configured: bool
     strategies: list[str]
+    last_successful_strategy: str | None
+    last_failure_class: str | None
+    last_http_status: int | None
+    last_login_required: bool | None
+    last_attempted_strategies: list[str]
 
 
 class ProjectResponse(BaseModel):

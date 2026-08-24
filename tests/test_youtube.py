@@ -119,7 +119,7 @@ def test_import_returns_verified_video_metadata_and_progress(paths, monkeypatch)
 
     assert result.path.name == "demo-abc123.mp4"
     assert result.metadata.title == "Demo video"
-    assert result.strategy == "recommended"
+    assert result.strategy == "web_embedded"
     assert result.attempts == 1
     assert progress[-1] == (1.0, "Ready")
     assert any(stage == "Downloading video" for _, stage in progress)
@@ -127,7 +127,7 @@ def test_import_returns_verified_video_metadata_and_progress(paths, monkeypatch)
     assert "height<=1080" in str(options_seen[-1]["format"])
 
 
-def test_http_403_retries_with_web_embedded(paths, monkeypatch) -> None:
+def test_http_403_retries_from_web_embedded_to_hls(paths, monkeypatch) -> None:
     strategies: list[str] = []
 
     class ProviderError(RuntimeError):
@@ -148,7 +148,7 @@ def test_http_403_retries_with_web_embedded(paths, monkeypatch) -> None:
             strategy = extractor.get("youtube", {}).get("player_client", ["recommended"])[0]
             if download:
                 strategies.append(strategy)
-                if strategy == "recommended":
+                if strategy == "web_embedded":
                     raise ProviderError("unable to download video data: HTTP Error 403")
                 _write_fake_output(self.options)
             return {**_metadata(), "format_id": "18"}
@@ -160,13 +160,13 @@ def test_http_403_retries_with_web_embedded(paths, monkeypatch) -> None:
         "https://www.youtube.com/watch?v=abc123"
     )
 
-    assert strategies == ["recommended", "web_embedded"]
-    assert result.strategy == "web_embedded"
+    assert strategies == ["web_embedded", "web_safari"]
+    assert result.strategy == "web_safari_hls"
     assert result.attempts == 2
     assert result.format_id == "18"
 
 
-def test_successful_strategy_is_tried_first_on_the_next_import(paths, monkeypatch) -> None:
+def test_strategy_order_remains_bounded_after_a_success(paths, monkeypatch) -> None:
     attempted: list[str] = []
 
     class ProviderError(RuntimeError):
@@ -187,7 +187,7 @@ def test_successful_strategy_is_tried_first_on_the_next_import(paths, monkeypatc
             strategy = extractor.get("youtube", {}).get("player_client", ["recommended"])[0]
             if download:
                 attempted.append(strategy)
-                if strategy == "recommended":
+                if strategy == "web_embedded":
                     raise ProviderError("HTTP Error 403")
                 _write_fake_output(self.options)
             return {**_metadata(), "format_id": "18"}
@@ -200,8 +200,8 @@ def test_successful_strategy_is_tried_first_on_the_next_import(paths, monkeypatc
     first_import_attempts = len(attempted)
     service.import_video("https://youtu.be/def456")
 
-    assert attempted[:first_import_attempts] == ["recommended", "web_embedded"]
-    assert attempted[first_import_attempts:] == ["web_embedded"]
+    assert attempted[:first_import_attempts] == ["web_embedded", "web_safari"]
+    assert attempted[first_import_attempts:] == ["web_embedded", "web_safari"]
 
 
 def test_web_safari_hls_is_used_after_direct_clients_fail(paths, monkeypatch) -> None:
@@ -235,7 +235,7 @@ def test_web_safari_hls_is_used_after_direct_clients_fail(paths, monkeypatch) ->
     )
 
     assert result.strategy == "web_safari_hls"
-    assert result.attempts == 3
+    assert result.attempts == 2
     assert result.format_id == "96"
 
 
@@ -297,10 +297,10 @@ def test_strategy_order_includes_configured_pot_and_cookie_fallback(paths, monke
     strategies = service.select_strategy()
 
     assert [strategy.name for strategy in strategies] == [
-        "recommended",
-        "mweb_pot",
         "web_embedded",
+        "mweb_pot",
         "web_safari_hls",
+        "recommended",
         "authenticated_cookie",
     ]
     pot_options = service._options(strategies[1], "job", paths.temp / "pot", None)
@@ -310,6 +310,18 @@ def test_strategy_order_includes_configured_pot_and_cookie_fallback(paths, monke
         "youtubepot-bgutilhttp": {"base_url": ["http://127.0.0.1:4416"]},
     }
     assert cookie_options["cookiefile"] == str(cookie_file)
+
+
+def test_render_secret_cookie_alias_is_supported(paths, monkeypatch) -> None:
+    cookie_file = paths.temp / "youtube-cookies.txt"
+    cookie_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.delenv("DRIPCUT_YOUTUBE_COOKIE_FILE", raising=False)
+    monkeypatch.setenv("YOUTUBE_COOKIE_FILE", str(cookie_file))
+
+    service = YouTubeService(paths, sleep=lambda _seconds: None)
+
+    assert service.diagnostics().cookie_fallback_configured is True
+    assert service.select_strategy()[-1].name == "authenticated_cookie"
 
 
 def test_diagnostics_report_capabilities_without_secret_paths(paths, monkeypatch) -> None:
@@ -325,5 +337,83 @@ def test_diagnostics_report_capabilities_without_secret_paths(paths, monkeypatch
 
     assert payload["cookie_fallback_configured"] is True
     assert payload["proxy_configured"] is True
+    assert payload["node_available"] is True
+    assert "js_challenge_support_active" in payload
+    assert payload["last_successful_strategy"] is None
+    assert payload["last_failure_class"] is None
     assert str(cookie_file) not in str(payload)
     assert "secret-proxy" not in str(payload)
+
+
+def test_diagnostics_record_normalized_fallback_without_raw_secrets(paths, monkeypatch) -> None:
+    class ProviderError(RuntimeError):
+        pass
+
+    class FakeYoutubeDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def extract_info(self, _url, *, download):
+            extractor = self.options.get("extractor_args", {})
+            strategy = extractor.get("youtube", {}).get("player_client", ["recommended"])[0]
+            if download and strategy == "web_embedded":
+                raise ProviderError("HTTP Error 403 for https://secret.example/signed?token=nope")
+            if download:
+                _write_fake_output(self.options)
+            return _metadata()
+
+    _install_fake_ytdlp(monkeypatch, FakeYoutubeDL, ProviderError)
+    monkeypatch.setattr(YouTubeImportService, "_validate_media", staticmethod(lambda _path: None))
+    service = YouTubeService(paths, sleep=lambda _seconds: None)
+
+    result = service.import_video("https://youtu.be/abc123")
+    diagnostics = service.diagnostics().to_dict()
+
+    assert result.strategy == "web_safari_hls"
+    assert diagnostics["last_successful_strategy"] == "web_safari_hls"
+    assert diagnostics["last_failure_class"] == "PUBLIC_EXTRACTION_BLOCKED"
+    assert diagnostics["last_http_status"] == 403
+    assert diagnostics["last_login_required"] is False
+    assert "secret.example" not in str(diagnostics)
+
+
+def test_all_public_strategies_fail_with_region_aware_upload_fallback(paths, monkeypatch) -> None:
+    class ProviderError(RuntimeError):
+        pass
+
+    class BrokenYoutubeDL:
+        def __init__(self, _options):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def extract_info(self, _url, *, download):
+            raise ProviderError("Sign in to confirm you're not a bot: HTTP Error 403")
+
+    _install_fake_ytdlp(monkeypatch, BrokenYoutubeDL, ProviderError)
+    service = YouTubeService(paths, sleep=lambda _seconds: None)
+
+    with pytest.raises(YouTubeImportError) as captured:
+        service.import_video("https://youtu.be/abc123")
+
+    assert captured.value.code == "PUBLIC_EXTRACTION_BLOCKED"
+    assert "current processing region" in str(captured.value)
+    assert "upload the video directly" in str(captured.value)
+    diagnostics = service.diagnostics()
+    assert diagnostics.last_http_status == 403
+    assert diagnostics.last_login_required is True
+    assert diagnostics.last_attempted_strategies == (
+        "web_embedded",
+        "web_safari_hls",
+        "recommended",
+    )

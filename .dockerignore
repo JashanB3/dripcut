@@ -33,4 +33,5 @@ tmp
 *.zip
 *.srt
 *.ass
+*cookies*.txt
 .DS_Store

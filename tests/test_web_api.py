@@ -283,8 +283,10 @@ def test_youtube_diagnostics_are_safe_for_operator_visibility(container) -> None
     assert response.status_code == 200
     payload = response.json()
     assert payload["yt_dlp_version"]
-    assert payload["strategies"][0] == "recommended"
+    assert payload["strategies"][0] == "web_embedded"
     assert "web_embedded" in payload["strategies"]
+    assert "last_successful_strategy" in payload
+    assert "last_failure_class" in payload
     assert "cookie_file" not in payload
     assert "proxy" not in payload
 

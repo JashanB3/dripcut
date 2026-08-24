@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -40,6 +41,7 @@ _MP4_FORMAT = (
 )
 _HLS_FORMAT = "b[protocol^=m3u8][height<=1080]/b[height<=1080]/best[height<=1080]/best"
 _URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
+_HTTP_STATUS_PATTERN = re.compile(r"(?:HTTP(?: Error)?|status(?: code)?)\D{0,12}(\d{3})", re.IGNORECASE)
 
 YouTubeErrorCode = Literal[
     "PUBLIC_EXTRACTION_BLOCKED",
@@ -82,12 +84,19 @@ class YouTubeDiagnostics:
     ffprobe_available: bool
     js_runtime: str | None
     js_runtime_version: str | None
+    node_available: bool
     ejs_version: str | None
+    js_challenge_support_active: bool
     po_token_provider_available: bool
     po_token_provider_configured: bool
     cookie_fallback_configured: bool
     proxy_configured: bool
     strategies: tuple[str, ...]
+    last_successful_strategy: str | None
+    last_failure_class: str | None
+    last_http_status: int | None
+    last_login_required: bool | None
+    last_attempted_strategies: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -100,6 +109,15 @@ class _ExtractionStrategy:
     use_hls: bool = False
     use_pot_provider: bool = False
     use_cookies: bool = False
+
+
+@dataclass(slots=True)
+class _ImportRuntimeState:
+    last_successful_strategy: str | None = None
+    last_failure_class: str | None = None
+    last_http_status: int | None = None
+    last_login_required: bool | None = None
+    last_attempted_strategies: tuple[str, ...] = ()
 
 
 class YouTubeImportError(MediaDownloadError):
@@ -160,10 +178,47 @@ def _runtime_version(runtimes: dict[str, dict[str, str]]) -> tuple[str | None, s
     return name, version
 
 
+def _node_available() -> bool:
+    return bool(
+        shutil.which("node")
+        or next(
+            (
+                path
+                for path in ("/opt/homebrew/bin/node", "/usr/local/bin/node")
+                if Path(path).is_file()
+            ),
+            None,
+        )
+    )
+
+
 def _safe_detail(error: Exception | str) -> str:
     detail = str(error).strip()
     detail = _URL_PATTERN.sub("<redacted-url>", detail)
     return detail[:1200]
+
+
+def _error_chain_detail(error: Exception | str) -> str:
+    if isinstance(error, str):
+        return error
+    details: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(details) < 4:
+        seen.add(id(current))
+        details.append(str(current))
+        current = current.__cause__ or current.__context__
+    return " | ".join(details)
+
+
+def _http_status(error: Exception | str) -> int | None:
+    match = _HTTP_STATUS_PATTERN.search(_error_chain_detail(error))
+    return int(match.group(1)) if match else None
+
+
+def _login_required(error: Exception | str, normalized: YouTubeImportError) -> bool:
+    lowered = _error_chain_detail(error).lower()
+    return normalized.code == "LOGIN_REQUIRED" or "sign in" in lowered or "login required" in lowered
 
 
 def _normalize_error(error: Exception) -> YouTubeImportError:
@@ -264,15 +319,16 @@ class YouTubeImportService:
     def __init__(self, paths: AppPaths, *, sleep: Callable[[float], None] = time.sleep) -> None:
         self.paths = paths
         self._sleep = sleep
-        self._preferred_strategy_name: str | None = None
-        self._metadata_strategy_name: str | None = None
+        self._state = _ImportRuntimeState()
+        self._state_lock = threading.Lock()
         diagnostics = self.diagnostics()
         _log.info(
-            "YouTube importer ready: yt-dlp=%s js=%s ejs=%s pot=%s cookies=%s proxy=%s",
+            "YouTube importer ready: yt-dlp=%s js=%s ejs=%s pot_available=%s pot_configured=%s cookies=%s proxy=%s",
             diagnostics.yt_dlp_version,
             diagnostics.js_runtime or "unavailable",
             diagnostics.ejs_version or "unavailable",
             "available" if diagnostics.po_token_provider_available else "unavailable",
+            "yes" if diagnostics.po_token_provider_configured else "no",
             "configured" if diagnostics.cookie_fallback_configured else "off",
             "configured" if diagnostics.proxy_configured else "off",
         )
@@ -317,39 +373,86 @@ class YouTubeImportService:
         runtime, runtime_version = _runtime_version(runtimes)
         cookie_file = self._cookie_file()
         strategies = tuple(strategy.name for strategy in self.select_strategy())
+        ejs_version = _distribution_version("yt-dlp-ejs")
+        with self._state_lock:
+            state = _ImportRuntimeState(**asdict(self._state))
         return YouTubeDiagnostics(
             yt_dlp_version=_distribution_version("yt-dlp") or "unavailable",
             ffmpeg_available=shutil.which("ffmpeg") is not None,
             ffprobe_available=shutil.which("ffprobe") is not None,
             js_runtime=runtime,
             js_runtime_version=runtime_version,
-            ejs_version=_distribution_version("yt-dlp-ejs"),
+            node_available=_node_available(),
+            ejs_version=ejs_version,
+            js_challenge_support_active=bool(runtime and ejs_version),
             po_token_provider_available=_distribution_version("bgutil-ytdlp-pot-provider") is not None,
             po_token_provider_configured=bool(os.environ.get("DRIPCUT_YOUTUBE_POT_PROVIDER_URL")),
             cookie_fallback_configured=cookie_file is not None,
             proxy_configured=bool(os.environ.get("DRIPCUT_YOUTUBE_PROXY")),
             strategies=strategies,
+            last_successful_strategy=state.last_successful_strategy,
+            last_failure_class=state.last_failure_class,
+            last_http_status=state.last_http_status,
+            last_login_required=state.last_login_required,
+            last_attempted_strategies=state.last_attempted_strategies,
         )
 
     def select_strategy(self) -> list[_ExtractionStrategy]:
-        strategies = [_ExtractionStrategy("recommended")]
+        strategies = [_ExtractionStrategy("web_embedded", player_client="web_embedded")]
         provider_url = os.environ.get("DRIPCUT_YOUTUBE_POT_PROVIDER_URL")
         provider_available = _distribution_version("bgutil-ytdlp-pot-provider") is not None
         if provider_url and provider_available:
             strategies.append(
                 _ExtractionStrategy("mweb_pot", player_client="mweb", use_pot_provider=True)
             )
-        strategies.append(_ExtractionStrategy("web_embedded", player_client="web_embedded"))
         strategies.append(
             _ExtractionStrategy("web_safari_hls", player_client="web_safari", use_hls=True)
         )
+        strategies.append(_ExtractionStrategy("recommended"))
         if self._cookie_file() is not None:
             strategies.append(_ExtractionStrategy("authenticated_cookie", use_cookies=True))
-        if self._preferred_strategy_name:
-            strategies.sort(
-                key=lambda strategy: strategy.name != self._preferred_strategy_name
-            )
         return strategies
+
+    def _record_attempt(self, strategy: _ExtractionStrategy) -> None:
+        with self._state_lock:
+            attempts = self._state.last_attempted_strategies
+            if strategy.name not in attempts:
+                self._state.last_attempted_strategies = (*attempts, strategy.name)[-10:]
+
+    def _record_failure(
+        self,
+        strategy: _ExtractionStrategy,
+        error: Exception,
+        normalized: YouTubeImportError,
+    ) -> None:
+        self._record_attempt(strategy)
+        status = _http_status(error)
+        login_required = _login_required(error, normalized)
+        with self._state_lock:
+            self._state.last_failure_class = normalized.code
+            self._state.last_http_status = status
+            self._state.last_login_required = login_required
+        pot_configured = bool(os.environ.get("DRIPCUT_YOUTUBE_POT_PROVIDER_URL")) and (
+            _distribution_version("bgutil-ytdlp-pot-provider") is not None
+        )
+        cookie_configured = self._cookie_file() is not None
+        js_active = bool(_javascript_runtimes() and _distribution_version("yt-dlp-ejs"))
+        _log.warning(
+            "youtube strategy=%s client=%s http_status=%s normalized=%s login_required=%s pot=%s cookies=%s js=%s",
+            strategy.name,
+            strategy.player_client or "default",
+            status if status is not None else "none",
+            normalized.code,
+            login_required,
+            strategy.use_pot_provider and pot_configured,
+            strategy.use_cookies and cookie_configured,
+            js_active,
+        )
+
+    def _record_success(self, strategy: _ExtractionStrategy) -> None:
+        self._record_attempt(strategy)
+        with self._state_lock:
+            self._state.last_successful_strategy = strategy.name
 
     def fetch_metadata(
         self,
@@ -363,6 +466,8 @@ class YouTubeImportService:
         if on_progress:
             on_progress(0.02, "Fetching video information")
         last_error: YouTubeImportError | None = None
+        with self._state_lock:
+            self._state.last_attempted_strategies = ()
         for strategy in self.select_strategy():
             try:
                 info = self._extract(
@@ -373,18 +478,19 @@ class YouTubeImportService:
                     download=False,
                     on_progress=None,
                 )
-                self._metadata_strategy_name = strategy.name
+                self._record_attempt(strategy)
                 return self._metadata(info, value)
             except Exception as error:  # noqa: BLE001 - normalize yt-dlp failures
                 normalized = error if isinstance(error, YouTubeImportError) else _normalize_error(error)
                 last_error = normalized
+                self._record_failure(strategy, error, normalized)
                 _log.warning(
                     "youtube import=%s video=%s metadata strategy=%s failed=%s detail=%s",
                     resolved_import_id,
                     self.video_id(value),
                     strategy.name,
                     normalized.code,
-                    _safe_detail(error),
+                    _safe_detail(_error_chain_detail(error)),
                 )
                 if normalized.code in {
                     "PRIVATE_VIDEO",
@@ -393,6 +499,8 @@ class YouTubeImportService:
                     "GEO_RESTRICTED",
                 }:
                     raise normalized from error
+        if last_error and last_error.code == "PUBLIC_EXTRACTION_BLOCKED":
+            raise self._regional_public_error()
         raise last_error or YouTubeImportError("DOWNLOAD_FAILED", "YouTube metadata could not be retrieved.")
 
     def import_video(
@@ -408,10 +516,6 @@ class YouTubeImportService:
         metadata_seconds = time.monotonic() - started
         destination = ensure_dir(self.paths.temp / "youtube" / f"{int(time.time())}-{import_id}")
         strategies = self.select_strategy()
-        if self._metadata_strategy_name:
-            strategies.sort(
-                key=lambda strategy: strategy.name != self._metadata_strategy_name
-            )
         last_error: YouTubeImportError | None = None
         download_started = time.monotonic()
 
@@ -441,7 +545,7 @@ class YouTubeImportService:
                 prepare_seconds = time.monotonic() - prepare_started
                 format_id = self._format_id(info)
                 elapsed = time.monotonic() - started
-                self._preferred_strategy_name = strategy.name
+                self._record_success(strategy)
                 _log.info(
                     "youtube import=%s video=%s strategy=%s format=%s yt-dlp=%s retries=%d elapsed=%.2fs success",
                     import_id,
@@ -468,6 +572,7 @@ class YouTubeImportService:
             except Exception as error:  # noqa: BLE001 - normalize yt-dlp failures
                 normalized = error if isinstance(error, YouTubeImportError) else _normalize_error(error)
                 last_error = normalized
+                self._record_failure(strategy, error, normalized)
                 _log.warning(
                     "youtube import=%s video=%s strategy=%s yt-dlp=%s retry=%d failed=%s detail=%s",
                     import_id,
@@ -476,7 +581,7 @@ class YouTubeImportService:
                     _distribution_version("yt-dlp") or "unknown",
                     attempt - 1,
                     normalized.code,
-                    _safe_detail(error),
+                    _safe_detail(_error_chain_detail(error)),
                 )
                 if normalized.code in {
                     "PRIVATE_VIDEO",
@@ -489,14 +594,17 @@ class YouTubeImportService:
                     self._sleep(min(0.75 * attempt, 2.0))
 
         if last_error and last_error.code == "PUBLIC_EXTRACTION_BLOCKED":
-            hint = "A PO-token provider may be required on this server, especially from AWS or other datacenter IPs."
-            raise YouTubeImportError(
-                last_error.code,
-                last_error.message,
-                hint=hint,
-                retryable=True,
-            )
+            raise self._regional_public_error()
         raise last_error or YouTubeImportError("DOWNLOAD_FAILED", "The YouTube import failed.")
+
+    @staticmethod
+    def _regional_public_error() -> YouTubeImportError:
+        return YouTubeImportError(
+            "PUBLIC_EXTRACTION_BLOCKED",
+            "We couldn't import this public video from YouTube from the current processing region.",
+            hint="Please retry shortly or upload the video directly.",
+            retryable=True,
+        )
 
     def download(
         self,
@@ -712,7 +820,9 @@ class YouTubeImportService:
 
     @staticmethod
     def _cookie_file() -> Path | None:
-        configured = os.environ.get("DRIPCUT_YOUTUBE_COOKIE_FILE")
+        configured = os.environ.get("DRIPCUT_YOUTUBE_COOKIE_FILE") or os.environ.get(
+            "YOUTUBE_COOKIE_FILE"
+        )
         if not configured:
             return None
         path = Path(configured).expanduser()

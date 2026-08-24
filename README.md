@@ -259,9 +259,19 @@ Configure these backend environment variables in Render, not in the image or rep
 | `DRIPCUT_ALLOWED_ORIGINS` | exact deployed frontend origin, such as `https://dripcut.example` |
 | `DRIPCUT_MAX_WORKERS` | `1` for a 512 MB instance |
 | `DRIPCUT_HOME` | `/var/lib/dripcut` |
+| `DRIPCUT_YOUTUBE_POT_PROVIDER_URL` | private URL of the bgutil provider on port `4416` |
+| `DRIPCUT_YOUTUBE_SOCKET_TIMEOUT` | `30` |
 
 Set `VITE_API_BASE_URL=https://<your-backend>.onrender.com` on the frontend static site
 before building it. Do not expose `GROQ_API_KEY` through a `VITE_` variable.
+
+For reliable public YouTube imports from Render datacenter IPs, create a second
+Render **Private Service** from
+`brainicism/bgutil-ytdlp-pot-provider:1.3.2`, keep port `4416` private, and point
+`DRIPCUT_YOUTUBE_POT_PROVIDER_URL` at its private-network URL. The Python plugin
+is installed by the DripCut production image. See
+[`docs/web-processing-api.md`](docs/web-processing-api.md#render-production-configuration)
+for network requirements, safe diagnostics, and optional Secret File cookie fallback.
 
 Render instances without a persistent disk have ephemeral storage. Uploaded/imported
 sources, rendered clips, transcript caches, ZIP archives, projects, job history, and

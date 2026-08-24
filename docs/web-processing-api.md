@@ -39,12 +39,12 @@ yt-dlp output:
 5. Checking downloaded video
 6. Ready
 
-The importer tries bounded, supported strategies in this order:
+The importer tries each bounded, supported strategy once in this order:
 
-1. yt-dlp's current recommended client selection
-2. `mweb` with a configured PO-token provider, when the plugin is installed
-3. `web_embedded` progressive MP4 fallback
-4. `web_safari` HLS fallback
+1. `web_embedded` for compatible public, embeddable videos
+2. `mweb` with a configured GVS PO-token provider
+3. `web_safari` HLS fallback
+4. yt-dlp's current recommended public-client selection
 5. an explicitly configured backend cookie file
 
 Every successful download is limited to 1080p, normalized to MP4, and checked
@@ -60,20 +60,62 @@ reads browser cookies automatically. A deployment can explicitly configure:
 - `DRIPCUT_YOUTUBE_SOCKET_TIMEOUT`, from 5 to 120 seconds (default 30)
 - `DRIPCUT_YOUTUBE_VERBOSE=1`, for redacted server-side diagnostics
 
-Install the optional Python plugin with `pip install -e '.[youtube-pot]'` and
-run a compatible bgutil provider before setting the provider URL. If YouTube
-requires verification and no provider is configured, the API returns a useful
-error and local uploads remain available.
+The production package includes the bgutil yt-dlp plugin. The provider itself
+must run separately; no temporary token is stored in DripCut. If YouTube
+requires verification and no provider is configured, the API returns a
+region-aware error and local uploads remain available.
 
-`GET /api/youtube/diagnostics` reports yt-dlp, FFmpeg, FFprobe, EJS, JS runtime,
-PO-provider, cookie fallback, proxy, and enabled strategy status. It returns only
-booleans and versions, never cookie paths, proxy URLs, tokens, or credentials.
+`GET /api/youtube/diagnostics` reports yt-dlp, FFmpeg, FFprobe, EJS, Node/JS
+runtime, PO-provider, cookie fallback, proxy, enabled strategies, last successful
+strategy, last normalized failure class, HTTP status, login challenge state, and
+the bounded attempt list. It returns only booleans, versions, status codes, and
+strategy names, never cookie paths, proxy/provider URLs, tokens, or credentials.
 
 AWS and other datacenter IP ranges are challenged more aggressively than many
 residential networks. Install the PO-provider plugin and run its provider as a
 separate service for production workers; keep cookie fallback optional and
 operator-managed. The frontend and SourceAsset pipeline do not change when the
 network strategy changes.
+
+### Render production configuration
+
+Create a Render **Private Service** named `dripcut-youtube-pot` from the pinned
+container image `brainicism/bgutil-ytdlp-pot-provider:1.3.2`. The provider listens
+on port `4416`; do not expose it publicly. Place it in the same Render region and
+workspace/private network as the DripCut API.
+
+Configure the DripCut **Web Service** with:
+
+| Variable | Value |
+|---|---|
+| `DRIPCUT_YOUTUBE_POT_PROVIDER_URL` | the provider's Render private-network URL, including port `4416` |
+| `DRIPCUT_YOUTUBE_SOCKET_TIMEOUT` | `30` |
+| `DRIPCUT_YOUTUBE_VERBOSE` | `1` while diagnosing, otherwise unset |
+
+The private service needs outbound HTTPS access to YouTube. The DripCut API needs
+outbound HTTPS access to YouTube and private-network access to the provider on
+TCP `4416`. Do not put the provider URL or any YouTube credential in a `VITE_`
+variable.
+
+Cookies are an optional final fallback, not the primary strategy. In Render,
+create a Secret File named `youtube-cookies.txt` mounted at
+`/etc/secrets/youtube-cookies.txt`, then set either:
+
+```text
+DRIPCUT_YOUTUBE_COOKIE_FILE=/etc/secrets/youtube-cookies.txt
+```
+
+or the compatible alias:
+
+```text
+YOUTUBE_COOKIE_FILE=/etc/secrets/youtube-cookies.txt
+```
+
+Use a Netscape-format file managed by the operator. Never collect customer
+browser cookies. Cookie-backed YouTube sessions can expire or be challenged and
+must be rotated by the operator; using an account also carries YouTube account
+risk. The cookie file pattern is excluded from Docker build context and its path
+and contents are excluded from diagnostics.
 
 ## Endpoints
 
