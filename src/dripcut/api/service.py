@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import json
-import mimetypes
-import re
+import os
 import shutil
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, BinaryIO, Literal, cast
+from typing import Any, BinaryIO, cast
+from uuid import uuid4
 
 from dripcut.api.contracts import (
     AIEditActionResponse,
@@ -26,12 +26,21 @@ from dripcut.api.contracts import (
     RenderRequest,
     ScheduleCreateRequest,
     ScheduledPostResponse,
+    SchedulePostUpdateRequest,
     ScheduleResponse,
     SocialConnectionResponse,
+    SocialMetadataRequest,
+    SocialMetadataResponse,
     SourceAssetResponse,
     StandardPlanRequest,
     StandardPlanResponse,
+    ThumbnailBriefResponse,
+    ThumbnailGenerationResponse,
+    ThumbnailRankResponse,
     ThumbnailRequest,
+    ViralMomentAnalysisResponse,
+    ViralMomentRequest,
+    ViralMomentResponse,
 )
 from dripcut.api.stores import (
     ArtifactRecord,
@@ -42,9 +51,12 @@ from dripcut.api.stores import (
 )
 from dripcut.core.container import ServiceContainer
 from dripcut.core.errors import ValidationError
+from dripcut.engines.ai.thumbnail import inspect_frame, usable_frames
+from dripcut.engines.subtitle.styles import get_preset
 from dripcut.models.clip import Segment, SegmentSource, SplitMode, SplitPlan
 from dripcut.models.job import Job, JobKind, JobResult
 from dripcut.models.project import Project, ProjectSummary
+from dripcut.tenancy.models import Principal
 
 
 class WebClipService:
@@ -79,7 +91,15 @@ class WebClipService:
             self.container.projects.save(project)
             raise
 
-    def create_youtube_import(self, url: str, *, rights_confirmed: bool = False) -> JobResponse:
+    def create_youtube_import(
+        self,
+        url: str,
+        *,
+        rights_confirmed: bool = False,
+        on_success: Callable[[], None] | None = None,
+        on_failure: Callable[[], None] | None = None,
+        idempotency_key: str | None = None,
+    ) -> JobResponse:
         value = self._require_youtube_permission(url, rights_confirmed)
         project = self._start_youtube_project(value)
         job = Job(
@@ -91,6 +111,7 @@ class WebClipService:
                 "rights_confirmed": True,
                 "rights_confirmed_at": project.content_rights_confirmed_at,
             },
+            idempotency_key=idempotency_key,
         )
         project.latest_job_id = job.id
         self.container.projects.save(project)
@@ -116,18 +137,27 @@ class WebClipService:
                 )
                 active.set_progress(0.99, "Ready")
                 source = self.sources.get(response.id)
+                if on_success:
+                    on_success()
                 return JobResult(
                     outputs=[Path(source.path)],
                     message="YouTube video imported and verified.",
                     data={"source_id": response.id, "project_id": project.id},
                 )
             except Exception:
+                if on_failure:
+                    on_failure()
                 project.status = "failed"
                 self.container.projects.save(project)
                 raise
 
         job.run = work
-        self.jobs.submit(job)
+        submitted = self.jobs.submit(job)
+        if submitted is not job:
+            self.container.projects.delete(project.id)
+            if on_failure:
+                on_failure()
+            return self.job_response(submitted.id, idempotent_replay=True)
         return self.job_response(job.id)
 
     def _register_youtube_result(
@@ -163,97 +193,291 @@ class WebClipService:
                 source = None
         return ProjectDetailResponse(**payload, source=source)
 
+    def claim_project(self, project_id: str, user_id: str) -> ProjectResponse:
+        """Stamp the informational owner field after tenant registration."""
+        project = self.container.projects.load(project_id)
+        if project.user_id != user_id:
+            project.user_id = user_id
+            self.container.projects.save(project)
+        return self._project_response(project.summary())
+
+    def rename_project(self, project_id: str, title: str) -> ProjectResponse:
+        project = self.container.projects.rename(project_id, title)
+        return self._project_response(project.summary())
+
+    def delete_project(self, project_id: str) -> None:
+        self.container.projects.delete(project_id, keep_outputs=False)
+
     def create_thumbnail_candidates(
         self, project_id: str, request: ThumbnailRequest
-    ) -> list[ArtifactResponse]:
+    ) -> ThumbnailGenerationResponse:
         project = self.container.projects.load(project_id)
         if not project.source_asset_id:
             raise ValidationError("Add a source video before creating thumbnails.")
         source = self.sources.get(project.source_asset_id)
         media = self.container.media.import_file(source.path)
-        job_id = f"thumbnail-{project.id}"
+        job_id = str(uuid4())
         output_dir = self.artifacts.output_dir(job_id).parent / "thumbnails"
         output_dir.mkdir(parents=True, exist_ok=True)
-        positions = [0.12, 0.34, 0.58, 0.82]
-        records: list[ArtifactRecord] = []
-        for index, fraction in enumerate(positions, start=1):
+        provider = self.container.ai.content_provider
+        if provider is None:
+            from dripcut.core.errors import AIProviderError
+
+            raise AIProviderError("Editorial AI is not configured.")
+        positions = [index / 17 for index in range(1, 17)]
+        inspected = []
+        for fraction in positions:
+            timestamp = max(0.0, media.duration * fraction)
             cached = self.container.media.thumbnail_for(
                 media,
-                at=max(0.0, media.duration * fraction),
+                at=timestamp,
                 width=1280,
             )
             if cached is None:
                 continue
-            target = output_dir / f"{project.slug}-candidate-{index}.jpg"
-            shutil.copy2(cached, target)
-            records.append(
-                self.artifacts.register_thumbnail(job_id, target, index=index)
-            )
-        if not records:
+            quality = inspect_frame(cached, timestamp)
+            if quality is not None:
+                inspected.append(quality)
+        finalists = usable_frames(inspected, limit=8)
+        if not finalists:
             raise ValidationError("Thumbnail candidates could not be created.")
+
+        transcript = self.container.ai.cached_transcript(Path(source.path))
+        prompt_candidates = []
+        by_id = {}
+        for index, frame in enumerate(finalists, start=1):
+            frame_id = f"frame-{index}"
+            by_id[frame_id] = frame
+            nearby = (
+                transcript.text_between(
+                    max(0, frame.timestamp - 4), min(transcript.duration, frame.timestamp + 4)
+                )
+                if transcript
+                else ""
+            )
+            prompt_candidates.append(
+                frame.prompt_payload(frame_id=frame_id, nearby_text=nearby)
+            )
+        ranked = provider.rank_clips(prompt_candidates, platform=request.target)
+        order = [item.id for item in ranked.clips if item.id in by_id]
+        order.extend(frame_id for frame_id in by_id if frame_id not in order)
+        selected_ids = order[:4]
+        rank_lookup = {item.id: item for item in ranked.clips}
+
+        records: list[ArtifactRecord] = []
+        ranking: list[ThumbnailRankResponse] = []
+        for index, frame_id in enumerate(selected_ids, start=1):
+            frame = by_id[frame_id]
+            target = output_dir / f"{project.slug}-candidate-{index}.jpg"
+            shutil.copy2(frame.path, target)
+            record = self.artifacts.register_thumbnail(job_id, target, index=index)
+            records.append(record)
+            model_rank = rank_lookup.get(frame_id)
+            ranking.append(
+                ThumbnailRankResponse(
+                    artifact_id=record.id,
+                    score=(model_rank.score if model_rank else round(frame.quality_score)),
+                    reason=(
+                        model_rank.reason
+                        if model_rank
+                        else "Selected from image sharpness, exposure, faces, and composition."
+                    ),
+                )
+            )
+        brief = provider.generate_thumbnail_brief(
+            transcript.text if transcript else source.title,
+            prompt=request.prompt,
+        )
         project.artifact_ids.extend(
             record.id for record in records if record.id not in project.artifact_ids
         )
-        project.notes = request.prompt.strip()
+        project.notes = brief.model_dump_json()
         self.container.projects.save(project)
-        return [self._artifact_response(record) for record in records]
+        return ThumbnailGenerationResponse(
+            candidates=[self._artifact_response(record) for record in records],
+            brief=ThumbnailBriefResponse(**brief.model_dump()),
+            ranking=ranking,
+        )
 
     def plan_ai_edit(self, request: AIEditPlanRequest) -> AIEditPlanResponse:
         source = self.sources.get(request.source_id)
-        if source.duration > 60.5:
-            raise ValidationError(
-                "AI Editor currently supports videos up to one minute.",
-                hint="Use Auto Clip for longer source videos.",
+        provider = self.container.ai.content_provider
+        if provider is None:
+            from dripcut.core.errors import AIProviderError
+
+            raise AIProviderError("Editorial AI is not configured.")
+        planned = provider.plan_edit(request.prompt.strip(), duration=source.duration)
+        output_format = {
+            "source": "source",
+            "16:9": "landscape",
+            "9:16": "portrait",
+            "1:1": "square",
+        }[planned.aspect_ratio]
+        clip_duration = min(source.duration, planned.duration)
+        if planned.selection == "viral":
+            transcript = self.container.ai.transcribe(
+                source.path,
+                source_asset_id=source.id,
             )
-        prompt = request.prompt.strip().lower()
-        output_format: Literal["source", "landscape", "portrait", "square"] = "source"
-        if any(word in prompt for word in ("portrait", "vertical", "reel", "short")):
-            output_format = "portrait"
-        elif "square" in prompt:
-            output_format = "square"
-        elif any(word in prompt for word in ("landscape", "widescreen", "16:9")):
-            output_format = "landscape"
-        auto_captions = any(word in prompt for word in ("caption", "subtitle"))
-        match = re.search(r"(\d{1,2})\s*(?:second|sec|s)\b", prompt)
-        clip_duration = min(source.duration, float(match.group(1)) if match else source.duration)
+            viral = self.container.ai.find_viral_moments(
+                transcript,
+                platform=planned.platform,
+                target_length=clip_duration,
+                max_clips=planned.count,
+                metadata={"title": source.title, "kind": source.kind},
+            )
+            segments = [
+                ClipSegmentRequest(
+                    id=f"ai-edit-viral-{index}",
+                    index=index,
+                    start=moment.start,
+                    end=moment.end,
+                    strategy="ai",
+                    score=moment.score / 100,
+                    reason=moment.reason,
+                )
+                for index, moment in enumerate(viral.segments, start=1)
+            ]
+        else:
+            maximum = max(1, int(source.duration // max(clip_duration, 0.001)))
+            count = min(planned.count, maximum)
+            segments = [
+                ClipSegmentRequest(
+                    id=f"ai-edit-standard-{index}",
+                    index=index,
+                    start=(index - 1) * clip_duration,
+                    end=min(source.duration, index * clip_duration),
+                    strategy="standard",
+                )
+                for index in range(1, count + 1)
+            ]
+        if not segments:
+            raise ValidationError(
+                "AI did not find a usable clip range.",
+                hint="Try standard selection or request fewer clips.",
+            )
         actions = [
-            AIEditActionResponse(kind="trim", label="Keep opening section", value=clip_duration),
+            AIEditActionResponse(kind="platform", label="Destination", value=planned.platform),
+            AIEditActionResponse(kind="selection", label="Selection", value=planned.selection),
+            AIEditActionResponse(kind="trim", label="Clip duration", value=clip_duration),
             AIEditActionResponse(kind="format", label="Output format", value=output_format),
-            AIEditActionResponse(kind="captions", label="Auto captions", value=auto_captions),
+            AIEditActionResponse(kind="captions", label="Auto captions", value=planned.captions),
+            AIEditActionResponse(kind="style", label="Caption style", value=planned.caption_style),
+            AIEditActionResponse(kind="reframe", label="Reframe", value=planned.reframe),
         ]
         project = self._project_for_source(source)
         project.project_type = "ai_edit"
         project.output_format = output_format
-        project.captions_enabled = auto_captions
+        project.captions_enabled = planned.captions
+        project.platform = planned.platform
         project.notes = request.prompt.strip()
         self.container.projects.save(project)
         return AIEditPlanResponse(
             source_id=source.id,
             summary=(
-                f"Create a {clip_duration:.0f}-second {output_format} edit"
-                f" with captions {'on' if auto_captions else 'off'}."
+                f"Create {len(segments)} {clip_duration:.0f}-second {planned.platform} "
+                f"clip{'s' if len(segments) != 1 else ''} using {planned.selection} selection."
             ),
             actions=actions,
-            segments=[
-                ClipSegmentRequest(
-                    id="ai-edit-segment-1",
-                    index=1,
-                    start=0,
-                    end=clip_duration,
-                    strategy="standard",
-                )
-            ],
+            segments=segments,
             output_format=output_format,
-            auto_captions=auto_captions,
+            auto_captions=planned.captions,
+            platform=planned.platform,
+            selection=planned.selection,
+            count=len(segments),
+            duration=clip_duration,
+            caption_style=planned.caption_style,
+            reframe=planned.reframe,
         )
 
-    def social_connections(self) -> list[SocialConnectionResponse]:
+    def generate_social_metadata(
+        self, project_id: str, request: SocialMetadataRequest
+    ) -> SocialMetadataResponse:
+        project = self.container.projects.load(project_id)
+        if not project.source_asset_id:
+            raise ValidationError("This project does not have a source video.")
+        source = self.sources.get(project.source_asset_id)
+        transcript = self.container.ai.transcribe(
+            source.path,
+            source_asset_id=source.id,
+        )
+        if request.artifact_id:
+            if request.artifact_id not in project.artifact_ids:
+                raise ValidationError("That clip is not part of this project.")
+            artifact = self.artifacts.get(request.artifact_id)
+            if artifact.index and project.plan:
+                segment = next(
+                    (item for item in project.plan.segments if item.index == artifact.index),
+                    None,
+                )
+                if segment:
+                    transcript = transcript.window(segment.start, segment.end)
+        provider = self.container.ai.content_provider
+        if provider is None:
+            from dripcut.core.errors import AIProviderError
+
+            raise AIProviderError("Editorial AI is not configured.")
+        package = provider.generate_social_metadata(transcript.text)
+        return SocialMetadataResponse(
+            project_id=project.id,
+            artifact_id=request.artifact_id,
+            **package.model_dump(),
+        )
+
+    def find_viral_moments(
+        self, source_id: str, request: ViralMomentRequest
+    ) -> ViralMomentAnalysisResponse:
+        source = self.sources.get(source_id)
+        transcript = self.container.ai.transcribe(
+            source.path,
+            source_asset_id=source.id,
+        )
+        provider = self.container.ai.content_provider
+        if provider is None:
+            from dripcut.core.errors import AIProviderError
+
+            raise AIProviderError("Editorial AI is not configured.")
+        analysis = self.container.ai.find_viral_moments(
+            transcript,
+            platform=request.platform,
+            target_length=request.target_length,
+            max_clips=request.max_clips,
+            metadata={"title": source.title, "kind": source.kind},
+        )
+        return ViralMomentAnalysisResponse(
+            source_id=source.id,
+            platform=request.platform,
+            model=provider.model,
+            analysis_version=str(getattr(provider, "analysis_version", "viral-v1")),
+            segments=[
+                ViralMomentResponse(
+                    id=f"viral-{index}",
+                    start=moment.start,
+                    end=moment.end,
+                    duration=moment.duration,
+                    score=moment.score,
+                    hook_score=moment.hook_score,
+                    retention_score=moment.retention_score,
+                    shareability_score=moment.shareability_score,
+                    platform=moment.platform,
+                    reason=moment.reason,
+                    hook=moment.hook,
+                )
+                for index, moment in enumerate(analysis.segments, start=1)
+            ],
+        )
+
+    def social_connections(
+        self, principal: Principal | None = None
+    ) -> list[SocialConnectionResponse]:
         return [
             SocialConnectionResponse(**asdict(connection))
-            for connection in self.container.social.connections()
+            for connection in self.container.social.connections(principal)
         ]
 
-    def create_schedule(self, request: ScheduleCreateRequest) -> ScheduleResponse:
+    def create_schedule(
+        self, request: ScheduleCreateRequest, principal: Principal | None = None
+    ) -> ScheduleResponse:
         project = self.container.projects.load(request.project_id)
         archive = self._project_archive(project)
         schedule = self.container.social.create_schedule_for_archive(
@@ -263,22 +487,49 @@ class WebClipService:
             interval_minutes=request.interval_minutes,
             start_at=request.start_at,
             caption=request.caption,
+            principal=principal,
         )
         project.scheduling_status = "draft"
         self.container.projects.save(project)
         ready = all(
             connection.connected
-            for platform, connection in self.container.social.connection_map().items()
+            for platform, connection in self.container.social.connection_map(principal).items()
             if platform in request.platforms
         )
-        return ScheduleResponse(
-            id=schedule.id,
-            project_id=project.id,
-            archive_name=schedule.archive_name,
-            created_at=schedule.created_at,
-            posts=[ScheduledPostResponse(**asdict(post)) for post in schedule.posts],
-            publish_ready=ready,
+        return self._schedule_response(schedule, publish_ready=ready)
+
+    def get_schedule(
+        self, schedule_id: str, principal: Principal | None = None
+    ) -> ScheduleResponse:
+        schedule = self.container.social.get_schedule(schedule_id, principal)
+        ready = all(post.status != "draft" for post in schedule.posts)
+        return self._schedule_response(schedule, publish_ready=ready)
+
+    def latest_schedule(
+        self, principal: Principal | None = None
+    ) -> ScheduleResponse | None:
+        schedule = self.container.social.latest_schedule(principal)
+        if schedule is None:
+            return None
+        ready = all(post.status != "draft" for post in schedule.posts)
+        return self._schedule_response(schedule, publish_ready=ready)
+
+    def update_scheduled_post(
+        self,
+        schedule_id: str,
+        post_id: str,
+        request: SchedulePostUpdateRequest,
+        principal: Principal | None = None,
+    ) -> ScheduleResponse:
+        schedule = self.container.social.update_scheduled_post(
+            schedule_id,
+            post_id,
+            publish_at=request.publish_at,
+            caption=request.caption,
+            principal=principal,
         )
+        ready = all(post.status != "draft" for post in schedule.posts)
+        return self._schedule_response(schedule, publish_ready=ready)
 
     def get_source(self, source_id: str) -> SourceAssetRecord:
         return self.sources.get(source_id)
@@ -306,7 +557,14 @@ class WebClipService:
             segments=segments,
         )
 
-    def create_render(self, request: RenderRequest) -> JobResponse:
+    def create_render(
+        self,
+        request: RenderRequest,
+        *,
+        on_success: Callable[[], None] | None = None,
+        on_failure: Callable[[], None] | None = None,
+        idempotency_key: str | None = None,
+    ) -> JobResponse:
         source = self.sources.get(request.source_id)
         segments = self._validated_segments(request.segments, source.duration)
         plan = SplitPlan(
@@ -327,6 +585,13 @@ class WebClipService:
         project.platform = self._platform_label(request.platforms)
         project.output_format = request.output_format
         project.captions_enabled = request.auto_captions
+        caption_presets = {
+            "clean": "Clean",
+            "dynamic": "Signal",
+            "minimal": "Documentary",
+            "bold": "Punch",
+        }
+        project.caption_style = get_preset(caption_presets[request.caption_style])
 
         job = Job(
             kind=cast(JobKind, JobKind.SPLIT),
@@ -338,7 +603,9 @@ class WebClipService:
                 "segment_count": len(segments),
                 "output_format": request.output_format,
                 "captions_enabled": request.auto_captions,
+                "caption_style": request.caption_style,
             },
+            idempotency_key=idempotency_key,
         )
         project.latest_job_id = job.id
         self.container.projects.save(project)
@@ -570,6 +837,8 @@ class WebClipService:
                 project.artifact_ids = [item.id for item in [*clips, archive]]
                 project.status = "completed"
                 self.container.projects.save(project)
+                if on_success:
+                    on_success()
                 return JobResult(
                     outputs=[*outputs, Path(archive.path)],
                     message=f"Created {len(outputs)} clips and one ZIP archive.",
@@ -580,12 +849,21 @@ class WebClipService:
                     },
                 )
             except Exception:
+                if on_failure:
+                    on_failure()
                 project.status = "failed"
                 self.container.projects.save(project)
                 raise
 
         job.run = work
-        self.jobs.submit(job)
+        submitted = self.jobs.submit(job)
+        if submitted is not job:
+            project.latest_job_id = submitted.id
+            project.status = "processing" if submitted.is_active else submitted.status.value
+            self.container.projects.save(project)
+            if on_failure:
+                on_failure()
+            return self.job_response(submitted.id, idempotent_replay=True)
         return self.job_response(job.id)
 
     def _can_stream_copy_plan(
@@ -613,7 +891,7 @@ class WebClipService:
             for segment in segments
         )
 
-    def job_response(self, job_id: str) -> JobResponse:
+    def job_response(self, job_id: str, *, idempotent_replay: bool = False) -> JobResponse:
         job = self.jobs.get(job_id)
         if job is None:
             raise ValidationError("That render job could not be found.", hint="Start the render again.")
@@ -634,9 +912,21 @@ class WebClipService:
             error=job.error,
             error_code=str(job.metadata.get("error_code") or "") or None,
             hint=job.hint,
+            created_at=job.created_at,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+            attempt=job.attempt,
+            max_attempts=job.max_attempts,
+            idempotent_replay=idempotent_replay,
+            idempotency_key=job.idempotency_key,
             artifacts=artifacts,
             zip_artifact=zip_artifact,
         )
+
+    def idempotent_job(self, key: str) -> JobResponse | None:
+        """Return a prior request result before repeating quota or project work."""
+        job = self.jobs.get_by_idempotency_key(key)
+        return self.job_response(job.id, idempotent_replay=True) if job else None
 
     def get_artifact(self, artifact_id: str) -> ArtifactRecord:
         return self.artifacts.get(artifact_id)
@@ -650,6 +940,17 @@ class WebClipService:
             if artifact.kind == "zip":
                 return artifact
         raise ValidationError("Render a project ZIP before creating a schedule.")
+
+    @staticmethod
+    def _schedule_response(schedule: Any, *, publish_ready: bool) -> ScheduleResponse:
+        return ScheduleResponse(
+            id=schedule.id,
+            project_id=schedule.project_id,
+            archive_name=schedule.archive_name,
+            created_at=schedule.created_at,
+            posts=[ScheduledPostResponse(**asdict(post)) for post in schedule.posts],
+            publish_ready=publish_ready,
+        )
 
     def _finish_source(
         self,
@@ -666,13 +967,51 @@ class WebClipService:
         if not info.has_video:
             shutil.rmtree(Path(record.path).parent, ignore_errors=True)
             raise ValidationError("This file has no video track.", hint="Choose a video file.")
+        container_names = {value.strip().lower() for value in info.container.split(",")}
+        supported_containers = {
+            "mov",
+            "mp4",
+            "m4a",
+            "3gp",
+            "3g2",
+            "mj2",
+            "matroska",
+            "webm",
+        }
+        if not container_names.intersection(supported_containers):
+            shutil.rmtree(Path(record.path).parent, ignore_errors=True)
+            raise ValidationError(
+                "This video container is not supported.",
+                hint="Upload an MP4, MOV, WebM, or Matroska video.",
+            )
+        max_bytes = int(self.container.settings.server.max_upload_mb) * 1024 * 1024
+        if info.size_bytes > max_bytes:
+            shutil.rmtree(Path(record.path).parent, ignore_errors=True)
+            raise ValidationError(
+                "This video is larger than the upload limit.",
+                hint=f"Choose a video smaller than {max_bytes // 1024 // 1024} MB.",
+            )
+        max_duration = float(os.environ.get("DRIPCUT_MAX_VIDEO_DURATION_SECONDS", "14400"))
+        if info.duration <= 0 or info.duration > max_duration:
+            shutil.rmtree(Path(record.path).parent, ignore_errors=True)
+            raise ValidationError(
+                "This video's duration is outside the supported range.",
+                hint=f"Choose a video shorter than {max_duration / 3600:g} hours.",
+            )
         width, height = info.video.display_resolution
         record.name = info.name
         record.duration = info.duration
         record.width = width
         record.height = height
         record.size_bytes = info.size_bytes
-        record.mime_type = mimetypes.guess_type(info.name)[0] or "video/mp4"
+        if "webm" in container_names:
+            record.mime_type = "video/webm"
+        elif "matroska" in container_names:
+            record.mime_type = "video/x-matroska"
+        elif "mov" in container_names and "mp4" not in container_names:
+            record.mime_type = "video/quicktime"
+        else:
+            record.mime_type = "video/mp4"
         thumbnail = self.container.media.thumbnail_for(info)
         if thumbnail:
             poster = Path(record.path).parent / "poster.jpg"
@@ -855,8 +1194,11 @@ class WebClipService:
             )
         return segments
 
-    @staticmethod
-    def _source_response(record: SourceAssetRecord) -> SourceAssetResponse:
+    def _source_response(self, record: SourceAssetRecord) -> SourceAssetResponse:
+        media_url = self.sources.signed_url(record) or f"/api/sources/{record.id}/media"
+        poster_url = None
+        if record.poster_path or record.poster_storage_key:
+            poster_url = self.sources.signed_url(record, poster=True) or f"/api/sources/{record.id}/poster"
         return SourceAssetResponse(
             id=record.id,
             kind=record.kind,
@@ -870,12 +1212,15 @@ class WebClipService:
             channel=record.channel,
             youtube_url=record.youtube_url,
             project_id=record.project_id,
-            media_url=f"/api/sources/{record.id}/media",
-            poster_url=f"/api/sources/{record.id}/poster" if record.poster_path else None,
+            media_url=media_url,
+            poster_url=poster_url,
         )
 
-    @staticmethod
-    def _artifact_response(record: ArtifactRecord) -> ArtifactResponse:
+    def _artifact_response(self, record: ArtifactRecord) -> ArtifactResponse:
+        stream_url = None
+        if record.kind in {"clip", "thumbnail"}:
+            stream_url = self.artifacts.signed_url(record) or f"/api/artifacts/{record.id}/media"
+        download_url = self.artifacts.signed_url(record, download=True) or f"/api/artifacts/{record.id}/download"
         return ArtifactResponse(
             id=record.id,
             job_id=record.job_id,
@@ -887,10 +1232,6 @@ class WebClipService:
             duration=record.duration,
             output_format=record.output_format,
             captions_enabled=record.captions_enabled,
-            stream_url=(
-                f"/api/artifacts/{record.id}/media"
-                if record.kind in {"clip", "thumbnail"}
-                else None
-            ),
-            download_url=f"/api/artifacts/{record.id}/download",
+            stream_url=stream_url,
+            download_url=download_url,
         )

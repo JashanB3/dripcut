@@ -10,10 +10,27 @@ const validRoutes = new Set<ProductRoute>([
   "auto-clip",
   "ai-thumbnail",
   "schedule",
+  "usage",
+  "admin",
   "settings",
 ]);
 
+const routePaths: Record<ProductRoute, string> = {
+  home: "/home",
+  projects: "/projects",
+  templates: "/templates",
+  "ai-editor": "/ai-editor",
+  "auto-clip": "/auto-clip",
+  "ai-thumbnail": "/ai-thumbnail",
+  schedule: "/schedule",
+  usage: "/usage",
+  admin: "/admin",
+  settings: "/settings",
+};
+
 const readRoute = (): ProductRoute => {
+  const pathname = window.location.pathname.replace(/^\/+|\/+$/g, "") as ProductRoute;
+  if (validRoutes.has(pathname)) return pathname;
   const value = window.location.hash.replace(/^#\/?/, "") as ProductRoute;
   return validRoutes.has(value) ? value : "home";
 };
@@ -24,11 +41,16 @@ export function useHashRoute() {
   useEffect(() => {
     const onHashChange = () => setRoute(readRoute());
     window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
+    window.addEventListener("popstate", onHashChange);
+    return () => {
+      window.removeEventListener("hashchange", onHashChange);
+      window.removeEventListener("popstate", onHashChange);
+    };
   }, []);
 
   const navigate = (next: ProductRoute) => {
-    window.location.hash = `/${next}`;
+    window.history.pushState({}, "", routePaths[next]);
+    window.location.hash = "";
     setRoute(next);
   };
 

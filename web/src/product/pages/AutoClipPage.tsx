@@ -1,15 +1,15 @@
 import { ArrowLeft, Check, Film, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { createClipJob, getProject, importYouTube, uploadSource } from "../api/client";
+import { createClipJob, findViralMoments, getProject, importYouTube, uploadSource } from "../api/client";
 import { ClipControls } from "../components/ClipControls";
 import { ClipResults } from "../components/ClipResults";
 import { RenderProgress } from "../components/RenderProgress";
 import { SourcePicker } from "../components/SourcePicker";
 import { SourceTimeline } from "../components/SourceTimeline";
-import { createDemoRecommendations } from "../mock/data";
 import type { ApiJob, ProductRoute, RuntimeSource, SourceAsset } from "../models";
-import { autoClipReducer, initialAutoClipState, selectedSegments } from "../state/autoClipReducer";
+import { autoClipReducer, initialAutoClipState, selectedDuration, selectedSegments } from "../state/autoClipReducer";
+import { findClipTemplate } from "../templates/catalog";
 
 const stepIndex = { source: 0, configure: 1, "render-preview": 2, results: 2 } as const;
 
@@ -22,11 +22,12 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
   const [sourceStage, setSourceStage] = useState("");
   const [job, setJob] = useState<ApiJob | null>(null);
   const [starting, setStarting] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const acceptSource = (source: SourceAsset, file?: File) => {
     setRuntime({ id: source.id, url: source.mediaUrl, file });
-    dispatch({ type: "source-loaded", source, recommendations: createDemoRecommendations(source.duration) });
+    dispatch({ type: "source-loaded", source });
   };
 
   const loadFile = async (file: File) => {
@@ -64,6 +65,11 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
   };
 
   useEffect(() => {
+    const template = findClipTemplate(window.localStorage.getItem("dripcut.selectedTemplate"));
+    if (template) {
+      dispatch({ type: "apply-template", template });
+      window.localStorage.removeItem("dripcut.selectedTemplate");
+    }
     const projectId = window.localStorage.getItem("dripcut.activeProjectId");
     if (!projectId) return;
     window.localStorage.removeItem("dripcut.activeProjectId");
@@ -83,6 +89,36 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
   const currentStep = stepIndex[state.phase];
   const segments = selectedSegments(state);
 
+  const toggleAI = async () => {
+    if (!state.source) return;
+    if (state.aiEnabled) {
+      dispatch({ type: "set-ai-enabled", value: false });
+      return;
+    }
+    dispatch({ type: "set-ai-enabled", value: true });
+    setAiBusy(true);
+    setSourceError("");
+    try {
+      const platform = state.platforms.includes("instagram") ? "instagram" : "youtube";
+      const recommendations = await findViralMoments(
+        state.source.id,
+        platform,
+        selectedDuration(state),
+        Math.max(1, Math.min(20, state.count || 8)),
+      );
+      dispatch({ type: "set-recommendations", recommendations });
+      if (recommendations.length === 0) {
+        setSourceError("AI did not find a complete standalone moment. Sequential clipping is still ready.");
+      }
+    } catch (error) {
+      dispatch({ type: "set-ai-enabled", value: false });
+      const hint = error && typeof error === "object" && "hint" in error ? ` ${(error as { hint?: string }).hint ?? ""}` : "";
+      setSourceError(`${error instanceof Error ? error.message : "AI analysis could not finish."}${hint}`.trim());
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
   const startRender = async () => {
     if (!state.source || segments.length === 0) return;
     setStarting(true);
@@ -92,6 +128,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
         outputFormat: state.outputFormat,
         autoCaptions: state.autoCaptions,
         platforms: state.platforms,
+        captionStyle: state.captionStyle,
       });
       setJob(created);
       dispatch({ type: "preview-render" });
@@ -111,7 +148,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
   return (
     <div className="auto-clip-page product-page">
       <header className="auto-clip-topline">
-        <div><span className="eyebrow"><Sparkles size={13} /> Auto Clip & Schedule</span><h1>One source. A whole content plan.</h1></div>
+        <div><span className="eyebrow"><Sparkles size={13} /> Auto Clip & Schedule</span><h1>One source. A whole content plan.</h1>{state.templateId && <small className="active-template-note">Template preset applied</small>}</div>
         <div className="workflow-steps">
           {["Source", "Clips", "Finish"].map((step, index) => <span key={step} data-active={currentStep === index} data-complete={currentStep > index}><i>{currentStep > index ? <Check size={12} /> : index + 1}</i>{step}</span>)}
         </div>
@@ -123,7 +160,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
           <button className="workflow-back" onClick={reset}><ArrowLeft size={16} /> Change source</button>
           <div className="configure-layout">
             <SourceTimeline state={state} dispatch={dispatch} runtime={runtime} videoRef={videoRef} />
-            <ClipControls state={state} dispatch={dispatch} onCreate={() => void startRender()} starting={starting} />
+            <ClipControls state={state} dispatch={dispatch} onCreate={() => void startRender()} onToggleAI={() => void toggleAI()} starting={starting} aiBusy={aiBusy} />
           </div>
         </>
       )}

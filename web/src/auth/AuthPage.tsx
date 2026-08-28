@@ -1,0 +1,121 @@
+import { useEffect, useState, type FormEvent } from "react";
+
+import { ApiError, requestJson } from "../product/api/client";
+import { exchangeOAuthTokens, googleAuthorize, navigatePath, useAuth } from "./authState";
+
+type AuthPageKind = "login" | "signup" | "forgot-password" | "reset-password" | "callback" | "logout";
+
+const copy = {
+  login: ["Welcome back", "Log in to pick up your latest clips and ZIPs."],
+  signup: ["Create your account", "Start clipping in under a minute."],
+  "forgot-password": ["Reset your password", "We will send a secure recovery link."],
+  "reset-password": ["Choose a new password", "Use at least eight characters."],
+  callback: ["Connecting your account", "Finishing the secure Google login."],
+  logout: ["Signing you out", "Closing this DripCut session."],
+} satisfies Record<AuthPageKind, [string, string]>;
+
+export function AuthPage({ kind }: { kind: AuthPageKind }) {
+  const auth = useAuth();
+  const { logout, refresh } = auth;
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (kind === "logout") {
+      void logout().finally(() => navigatePath("/login", true));
+    }
+    if (kind === "callback") {
+      const values = new URLSearchParams(window.location.hash.replace(/^#/, "") || window.location.search);
+      const accessToken = values.get("access_token");
+      const refreshToken = values.get("refresh_token");
+      if (!accessToken || !refreshToken) {
+        setError("Google did not return a valid session. Please try again.");
+        return;
+      }
+      void exchangeOAuthTokens(accessToken, refreshToken)
+        .then(refresh)
+        .then(() => navigatePath("/home", true))
+        .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Google login failed."));
+    }
+  }, [kind, logout, refresh]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      if (kind === "login") {
+        await auth.login(email, password);
+        navigatePath("/home", true);
+      } else if (kind === "signup") {
+        const result = await auth.signup(name, email, password);
+        if (result.requires_email_confirmation) setMessage(result.message ?? "Check your email to continue.");
+        else navigatePath("/home", true);
+      } else if (kind === "forgot-password") {
+        const result = await requestJson<{ message: string }>("/api/auth/forgot-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        setMessage(result.message);
+      } else if (kind === "reset-password") {
+        const values = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+        await requestJson("/api/auth/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            password,
+            access_token: values.get("access_token"),
+            refresh_token: values.get("refresh_token"),
+          }),
+        });
+        await auth.refresh();
+        setMessage("Password updated. You can continue to DripCut.");
+      }
+    } catch (reason) {
+      const failure = reason as ApiError;
+      setError(failure.message || "Unable to continue.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const [title, subtitle] = copy[kind];
+  const isPassive = kind === "callback" || kind === "logout";
+  return (
+    <div className="auth-screen">
+      <header className="auth-header">
+        <button className="auth-brand" onClick={() => navigatePath("/")}><span>dc</span><strong>DripCut</strong></button>
+        <nav><button onClick={() => navigatePath("/login")}>Log in</button><button className="auth-signup" onClick={() => navigatePath("/signup")}>Sign up free</button></nav>
+      </header>
+      <section className="auth-story">
+        <span className="auth-kicker">One video in. A week of content out.</span>
+        <h1>What will you <em>clip</em> today?</h1>
+        <p>Turn one long video into captioned Shorts and Reels. Upload, choose your moments, and download the ZIP.</p>
+        <ul><li>Sequential clipping works without AI</li><li>Captions built for vertical video</li><li>Your projects stay inside your workspace</li></ul>
+      </section>
+      <section className="auth-card" aria-live="polite">
+        <h2>{title}</h2><p>{subtitle}</p>
+        {isPassive ? <div className="auth-loader" /> : (
+          <form onSubmit={submit}>
+            {(kind === "login" || kind === "signup") && <button type="button" className="oauth-button" onClick={() => void googleAuthorize().catch((reason: Error) => setError(reason.message))}>Continue with Google</button>}
+            {(kind === "login" || kind === "signup") && <div className="auth-divider"><span>or use your email</span></div>}
+            {kind === "signup" && <label>Name<input value={name} onChange={(event) => setName(event.target.value)} required autoComplete="name" placeholder="Your creator name" /></label>}
+            {kind !== "reset-password" && <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="email" placeholder="you@example.com" /></label>}
+            {kind !== "forgot-password" && <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} autoComplete={kind === "login" ? "current-password" : "new-password"} placeholder="At least 8 characters" /></label>}
+            {kind === "login" && <button type="button" className="auth-link" onClick={() => navigatePath("/forgot-password")}>Forgot password?</button>}
+            <button className="auth-submit" disabled={busy}>{busy ? "Please wait..." : kind === "login" ? "Log in" : kind === "signup" ? "Create free account" : kind === "forgot-password" ? "Send reset link" : "Update password"}</button>
+          </form>
+        )}
+        {message && <div className="auth-message auth-message--success">{message}</div>}
+        {error && <div className="auth-message auth-message--error">{error}</div>}
+        {!isPassive && <button className="auth-switch" onClick={() => navigatePath(kind === "login" ? "/signup" : "/login")}>{kind === "login" ? "New to DripCut? Create an account" : "Already have an account? Log in"}</button>}
+      </section>
+    </div>
+  );
+}

@@ -36,6 +36,9 @@ def test_validate_url_accepts_youtube_video_urls(url: str) -> None:
         "not a link",
         "https://example.com/video",
         "https://youtube.com.example.com/watch?v=x",
+        "http://www.youtube.com/watch?v=abc123",
+        "https://attacker@example.com@youtube.com/watch?v=abc123",
+        "https://www.youtube.com:8443/watch?v=abc123",
         "https://www.youtube.com/@creator",
     ],
 )

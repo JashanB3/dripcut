@@ -6,6 +6,8 @@ export type ProductRoute =
   | "auto-clip"
   | "ai-thumbnail"
   | "schedule"
+  | "usage"
+  | "admin"
   | "settings";
 export type SourceKind = "upload" | "youtube";
 export type Platform = "youtube" | "instagram";
@@ -83,6 +85,9 @@ export interface AiRecommendation {
   score: number;
   reason: string;
   label: string;
+  hookScore?: number;
+  retentionScore?: number;
+  shareabilityScore?: number;
 }
 
 export interface ProjectSummary {
@@ -143,10 +148,43 @@ export interface ScheduleDraft {
 export interface AIEditPlan {
   sourceId: string;
   summary: string;
-  actions: Array<{ kind: "trim" | "format" | "captions"; label: string; value: string | number | boolean }>;
+  actions: Array<{ kind: "selection" | "platform" | "trim" | "format" | "captions" | "style" | "reframe"; label: string; value: string | number | boolean }>;
   segments: ClipSegment[];
   outputFormat: OutputFormat;
   autoCaptions: boolean;
+  platform: Platform;
+  selection: "standard" | "viral";
+  count: number;
+  duration: number;
+  captionStyle: "clean" | "dynamic" | "minimal" | "bold";
+  reframe: "source" | "center" | "speaker" | "blur_background";
+}
+
+export interface SocialMetadataPackage {
+  projectId: string;
+  artifactId?: string;
+  youtubeTitle: string;
+  youtubeDescription: string;
+  youtubeHashtags: string[];
+  instagramCaption: string;
+  instagramHashtags: string[];
+  instagramCta: string;
+  hook: string;
+  category: string;
+  postingDescription: string;
+}
+
+export interface ThumbnailGeneration {
+  candidates: ApiArtifact[];
+  brief: {
+    headline: string;
+    visualFocus: string;
+    emotion: string;
+    composition: string;
+    frameGuidance: string;
+    avoid: string[];
+  };
+  ranking: Array<{ artifactId: string; score: number; reason: string }>;
 }
 
 export interface SocialConnection {
@@ -163,6 +201,62 @@ export interface SavedSchedule {
   projectId: string;
   archiveName: string;
   createdAt: number;
-  posts: Array<{ platform: Platform; clipName: string; publishAt: string; caption: string; status: string }>;
+  posts: Array<{
+    id: string;
+    platform: Platform;
+    clipName: string;
+    publishAt: string;
+    caption: string;
+    status: string;
+    externalPostId?: string;
+    errorMessage?: string;
+  }>;
   publishReady: boolean;
+}
+
+export interface UsageMetric {
+  key: string;
+  label: string;
+  used: number;
+  reserved: number;
+  limit: number | null;
+  unit: string;
+  percent: number;
+  unlimited: boolean;
+}
+
+export interface UsageSummary {
+  plan: string;
+  planLabel: string;
+  periodStart: string;
+  periodEnd: string;
+  resetAt: string;
+  metrics: UsageMetric[];
+}
+
+export interface AdminOverview {
+  metrics: Record<string, number>;
+  users: Array<{
+    id: string;
+    email: string;
+    name: string;
+    workspaceId: string;
+    role: string;
+    createdAt: string;
+    lastActiveAt: string;
+  }>;
+  jobs: Array<{
+    id: string;
+    title: string;
+    status: string;
+    stage: string;
+    projectId: string;
+    errorCode: string;
+    errorMessage: string;
+    createdAt: string;
+    elapsedSeconds: number;
+  }>;
+  errors: AdminOverview["jobs"];
+  usage: Array<{ metric: string; quantity: number; unit: string }>;
+  generatedAt: string;
 }

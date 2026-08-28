@@ -50,7 +50,7 @@ export function AIEditorPage() {
       setJob(await createClipJob(plan.sourceId, plan.segments, {
         outputFormat: plan.outputFormat,
         autoCaptions: plan.autoCaptions,
-        platforms: [],
+        platforms: [plan.platform],
       }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The edit could not start.");
@@ -71,7 +71,7 @@ export function AIEditorPage() {
   return (
     <div className="ai-editor-page product-page narrow-page">
       <header className="page-intro">
-        <span className="eyebrow">AI Editor · local planner</span>
+        <span className="eyebrow">AI Editor · reviewable planner</span>
         <h1>Describe the edit. Review every action.</h1>
         <p>DripCut translates a constrained prompt into a real render plan. Nothing runs until you approve it.</p>
       </header>
@@ -82,7 +82,7 @@ export function AIEditorPage() {
           <div className="ai-chat-preview__empty">
             <MessageSquareText size={32} />
             <h2>{source ? "Describe your finished clip" : "Start with a short video"}</h2>
-            <p>Maximum source length: 1 minute.</p>
+            <p>Every AI action is constrained and shown before rendering.</p>
             {!source && <div className="prompt-examples"><span>“Make this a 20-second portrait clip.”</span><span>“Add captions for Instagram.”</span><span>“Keep it landscape with subtitles.”</span></div>}
             {plan && <div className="ai-action-plan"><strong>{plan.summary}</strong>{plan.actions.map((action) => <span key={action.kind}><Check size={14} /> {action.label}: {String(action.value)}</span>)}</div>}
           </div>
@@ -92,7 +92,7 @@ export function AIEditorPage() {
         <aside className="ai-source-preview">
           {source ? <video controls playsInline preload="metadata" src={source.mediaUrl} poster={source.thumbnailUrl} /> : <FileVideo2 size={30} />}
           <h2>{source?.name ?? "Add a video"}</h2>
-          <p>{source ? `${Math.round(source.duration)} seconds · ready to plan` : "Upload one video up to 60 seconds."}</p>
+          <p>{source ? `${Math.round(source.duration)} seconds · ready to plan` : "Upload a video to create a safe edit plan."}</p>
           <button disabled={busy} onClick={() => input.current?.click()}><Upload size={16} /> {source ? "Change source" : "Upload video"}</button>
           <input ref={input} className="dc-visually-hidden" type="file" accept="video/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void load(file); event.currentTarget.value = ""; }} />
         </aside>

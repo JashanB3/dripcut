@@ -8,8 +8,17 @@ instantly when the user cancels - which matters a great deal on 8 GB of RAM.
 
 from __future__ import annotations
 
+from dripcut.engines.ffmpeg.encoder import EncoderProvider, EncoderSelection
 from dripcut.engines.ffmpeg.filters import FilterGraph, ScaleMode
 from dripcut.engines.ffmpeg.probe import MediaProbe
 from dripcut.engines.ffmpeg.runner import FFmpegRunner, ProgressCallback
 
-__all__ = ["FFmpegRunner", "FilterGraph", "MediaProbe", "ProgressCallback", "ScaleMode"]
+__all__ = [
+    "EncoderProvider",
+    "EncoderSelection",
+    "FFmpegRunner",
+    "FilterGraph",
+    "MediaProbe",
+    "ProgressCallback",
+    "ScaleMode",
+]

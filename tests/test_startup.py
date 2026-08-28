@@ -17,7 +17,7 @@ def test_pick_server_port_falls_back_when_busy(monkeypatch) -> None:
     import dripcut.core.network as network
 
     class FakeSocket:
-        def __enter__(self) -> "FakeSocket":
+        def __enter__(self) -> FakeSocket:
             return self
 
         def __exit__(self, exc_type, exc, tb) -> None:

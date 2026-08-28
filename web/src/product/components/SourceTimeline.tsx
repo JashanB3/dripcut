@@ -90,7 +90,7 @@ export function SourceTimeline({ state, dispatch, runtime, videoRef }: {
         </div>
         {state.aiEnabled && (
           <div className="ai-recommendations">
-            <div className="ai-recommendations__heading"><span><Sparkles size={16} /> Demo AI recommendations</span><small>UI-only examples · no analysis was run</small></div>
+            <div className="ai-recommendations__heading"><span><Sparkles size={16} /> AI viral recommendations</span><small>Scored from the source transcript for your destination</small></div>
             <div className="recommendation-row">
               {state.recommendations.map((item) => {
                 const accepted = state.acceptedRecommendationIds.includes(item.id);

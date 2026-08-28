@@ -9,14 +9,15 @@ import {
   Instagram,
   Play,
   Plus,
+  Radio,
   Sparkles,
   WandSparkles,
   Youtube,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { apiUrl, fetchProjects } from "../api/client";
-import type { ApiProject, ProductRoute } from "../models";
+import { apiUrl, fetchLatestSchedule, fetchProjects, fetchUsage } from "../api/client";
+import type { ApiProject, ProductRoute, SavedSchedule, UsageSummary } from "../models";
 
 const quickActions = [
   ["Auto Clip", Sparkles, "auto-clip"],
@@ -43,13 +44,23 @@ export function HomePage({ onCreate, onNavigate }: {
 }) {
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [projectsBusy, setProjectsBusy] = useState(true);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [schedule, setSchedule] = useState<SavedSchedule | null>(null);
 
   useEffect(() => {
-    void fetchProjects(8)
-      .then(setProjects)
-      .catch(() => setProjects([]))
+    void Promise.allSettled([fetchProjects(8), fetchUsage(), fetchLatestSchedule()])
+      .then(([projectResult, usageResult, scheduleResult]) => {
+        setProjects(projectResult.status === "fulfilled" ? projectResult.value : []);
+        setUsage(usageResult.status === "fulfilled" ? usageResult.value : null);
+        setSchedule(scheduleResult.status === "fulfilled" ? scheduleResult.value : null);
+      })
       .finally(() => setProjectsBusy(false));
   }, []);
+
+  const downloadable = projects.filter((project) => project.downloadArtifactId).slice(0, 3);
+  const scheduledPosts = schedule?.posts.filter((post) => ["scheduled", "uploading"].includes(post.status)) ?? [];
+  const nextPost = [...scheduledPosts].sort((a, b) => a.publishAt.localeCompare(b.publishAt))[0];
+  const processing = usage?.metrics.find((metric) => metric.key === "video_processing_minutes");
 
   const openProject = (project: ApiProject) => {
     window.localStorage.setItem("dripcut.activeProjectId", project.id);
@@ -78,6 +89,12 @@ export function HomePage({ onCreate, onNavigate }: {
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="workspace-pulse" aria-label="Workspace overview">
+        <article><span><Download size={17} /></span><div><small>Recent exports</small><strong>{downloadable.length ? `${downloadable.length} ready` : "No ZIP yet"}</strong><em>{downloadable[0]?.title ?? "Your latest renders appear here"}</em></div>{downloadable[0]?.downloadArtifactId && <a href={apiUrl(`/api/artifacts/${downloadable[0].downloadArtifactId}/download`)} download>Download</a>}</article>
+        <article><span><Radio size={17} /></span><div><small>Scheduled content</small><strong>{scheduledPosts.length ? `${scheduledPosts.length} upcoming` : "Nothing queued"}</strong><em>{nextPost ? `${nextPost.platform} · ${new Date(nextPost.publishAt).toLocaleString()}` : "Connect a platform when you are ready"}</em></div><button onClick={() => onNavigate("schedule")}>Open</button></article>
+        <article><span><Film size={17} /></span><div><small>{usage?.planLabel ?? "Usage"}</small><strong>{processing ? `${processing.used.toFixed(1)} / ${processing.limit ?? "∞"} min` : "Usage ready"}</strong><em>{processing ? `Resets ${new Date(usage!.resetAt).toLocaleDateString()}` : "View processing and AI allowances"}</em></div><button onClick={() => onNavigate("usage")}>View</button></article>
       </section>
 
       <section className="auto-clip-feature">

@@ -1,8 +1,8 @@
-import { CalendarClock, CheckCircle2, Instagram, Youtube } from "lucide-react";
+import { CalendarClock, CheckCircle2, Instagram, Sparkles, Youtube } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { fetchProjects, fetchSocialConnections, saveSchedule } from "../api/client";
-import type { ApiProject, Platform, SavedSchedule, SocialConnection } from "../models";
+import { beginSocialOAuth, disconnectSocial, fetchProjects, fetchSchedule, fetchSocialConnections, generateSocialMetadata, saveSchedule, updateScheduledPost } from "../api/client";
+import type { ApiProject, Platform, SavedSchedule, SocialConnection, SocialMetadataPackage } from "../models";
 
 export function SchedulePage() {
   const [projects, setProjects] = useState<ApiProject[]>([]);
@@ -15,8 +15,14 @@ export function SchedulePage() {
   const [schedule, setSchedule] = useState<SavedSchedule | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [metadata, setMetadata] = useState<SocialMetadataPackage | null>(null);
+  const [connectionBusy, setConnectionBusy] = useState<Platform | null>(null);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
+    const socialResult = new URLSearchParams(window.location.search).get("social");
+    if (socialResult?.endsWith("-connected")) setNotice("Account connected. Your scheduled posts can now publish automatically.");
+    if (socialResult?.endsWith("-denied")) setNotice("Connection cancelled. Nothing was changed.");
     void Promise.all([fetchProjects(100), fetchSocialConnections()]).then(([items, statuses]) => {
       const ready = items.filter((item) => item.downloadArtifactId && item.status === "completed");
       setProjects(ready);
@@ -24,6 +30,43 @@ export function SchedulePage() {
       setConnections(statuses);
     }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Scheduling data could not load."));
   }, []);
+
+  useEffect(() => {
+    if (!schedule || !schedule.posts.some((post) => post.status === "scheduled" || post.status === "uploading")) return;
+    const timer = window.setInterval(() => {
+      void fetchSchedule(schedule.id).then(setSchedule).catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [schedule]);
+
+  const adjustPost = async (postId: string, update: { publishAt?: string; caption?: string }) => {
+    if (!schedule) return;
+    setError("");
+    try {
+      setSchedule(await updateScheduledPost(schedule.id, postId, update));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "That post could not be updated.");
+    }
+  };
+
+  const changeConnection = async (connection: SocialConnection) => {
+    setConnectionBusy(connection.platform);
+    setError("");
+    try {
+      if (connection.connected) {
+        await disconnectSocial(connection.platform);
+        setConnections(await fetchSocialConnections());
+        setNotice(`${connection.label} disconnected.`);
+      } else {
+        const authorizationUrl = await beginSocialOAuth(connection.platform);
+        window.location.assign(authorizationUrl);
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The social account could not be updated.");
+    } finally {
+      setConnectionBusy(null);
+    }
+  };
 
   const toggle = (platform: Platform) => {
     const next = platforms.includes(platform) ? platforms.filter((item) => item !== platform) : [...platforms, platform];
@@ -42,10 +85,30 @@ export function SchedulePage() {
     }
   };
 
+  const createMetadata = async () => {
+    if (!projectId) return;
+    setBusy(true);
+    setError("");
+    try {
+      const generated = await generateSocialMetadata(projectId);
+      setMetadata(generated);
+      setCaption(
+        platforms.includes("instagram")
+          ? `${generated.instagramCaption}\n\n${generated.instagramHashtags.join(" ")}\n${generated.instagramCta}`.trim()
+          : `${generated.youtubeDescription}\n\n${generated.youtubeHashtags.join(" ")}`.trim(),
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Social metadata could not be generated.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return <div className="schedule-page product-page">
     <header className="page-heading-row"><div><span className="eyebrow">Publishing</span><h1>Schedule your finished clips.</h1><p>Save a durable posting plan. Publishing unlocks only when official platform credentials are configured.</p></div></header>
     {error && <div className="source-error-banner">{error}</div>}
-    <div className="connection-cards">{connections.map((connection) => <article key={connection.platform} data-connected={connection.connected}>{connection.platform === "youtube" ? <Youtube /> : <Instagram />}<div><strong>{connection.label}</strong><span>{connection.detail}</span><small>{connection.configured ? "Credentials configured; OAuth verification still required." : connection.setupHint}</small></div><em>{connection.connected ? "Connected" : connection.configured ? "Setup incomplete" : "Not connected"}</em></article>)}</div>
+    {notice && <div className="social-notice"><CheckCircle2 size={16} /> {notice}</div>}
+    <div className="connection-cards">{connections.map((connection) => <article key={connection.platform} data-connected={connection.connected}>{connection.platform === "youtube" ? <Youtube /> : <Instagram />}<div><strong>{connection.label}</strong><span>{connection.detail}</span><small>{connection.connected ? "Encrypted credentials are stored on the server." : connection.configured ? "Official OAuth is ready." : connection.setupHint}</small></div><button disabled={!connection.configured || connectionBusy === connection.platform} onClick={() => void changeConnection(connection)}>{connectionBusy === connection.platform ? "Working…" : connection.connected ? "Disconnect" : connection.configured ? "Connect" : "Admin setup"}</button></article>)}</div>
     <div className="schedule-workspace">
       <section className="schedule-builder">
         <label><span>Finished project</span><select value={projectId} onChange={(event) => setProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
@@ -53,12 +116,21 @@ export function SchedulePage() {
         <label><span>Start</span><input type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} /></label>
         <label><span>Interval</span><select value={interval} onChange={(event) => setInterval(Number(event.target.value))}><option value="360">Every 6 hours</option><option value="720">Every 12 hours</option><option value="1440">Daily</option><option value="2880">Every 2 days</option></select></label>
         <label><span>Caption template</span><textarea value={caption} onChange={(event) => setCaption(event.target.value)} /></label>
-        <button className="primary-action" disabled={!projectId || busy} onClick={() => void save()}><CalendarClock size={16} /> {busy ? "Saving…" : "Save schedule"}</button>
+        <button className="secondary-action" disabled={!projectId || busy} onClick={() => void createMetadata()}><Sparkles size={16} /> {busy ? "Generating…" : "Generate editable AI metadata"}</button>
+        {metadata && <div className="social-metadata-preview"><strong>{metadata.youtubeTitle}</strong><span>{metadata.hook} · {metadata.category}</span><small>{metadata.postingDescription}</small></div>}
+        <button className="primary-action" disabled={!projectId || busy} onClick={() => void save()}><CalendarClock size={16} /> {busy ? "Saving…" : platforms.every((platform) => connections.some((connection) => connection.platform === platform && connection.connected)) ? "Schedule posts" : "Save draft"}</button>
       </section>
       <section className="saved-schedule">
         {!schedule && <div className="projects-empty projects-empty--large"><CalendarClock size={28} /><strong>No schedule preview yet</strong><span>Choose a finished project and save its posting rhythm.</span></div>}
-        {schedule && <><header><CheckCircle2 size={20} /><div><strong>{schedule.posts.length} posts planned</strong><span>{schedule.archiveName}</span></div><em>{schedule.publishReady ? "Ready to publish" : "Draft only"}</em></header>{schedule.posts.map((post, index) => <article key={`${post.platform}-${post.clipName}-${index}`}><strong>{post.clipName}</strong><span>{post.platform} · {post.publishAt}</span><small>{post.caption}</small></article>)}{!schedule.publishReady && <p className="development-note">Draft saved. Automatic publishing remains disabled until every selected account passes the credential check.</p>}</>}
+        {schedule && <><header><CheckCircle2 size={20} /><div><strong>{schedule.posts.length} posts planned</strong><span>{schedule.archiveName}</span></div><em>{schedule.publishReady ? "Publishing active" : "Draft only"}</em></header>{schedule.posts.map((post) => <article key={post.id} data-status={post.status}><strong>{post.clipName}</strong><span>{post.platform} · {post.status}</span><label><span>Publish time</span><input type="datetime-local" defaultValue={toLocalInput(post.publishAt)} disabled={post.status === "uploading" || post.status === "published"} onBlur={(event) => event.target.value && void adjustPost(post.id, { publishAt: event.target.value })} /></label><label><span>Caption</span><textarea defaultValue={post.caption} disabled={post.status === "uploading" || post.status === "published"} onBlur={(event) => void adjustPost(post.id, { caption: event.target.value })} /></label>{post.errorMessage && <small>{post.errorMessage}</small>}</article>)}{!schedule.publishReady && <p className="development-note">Draft saved. Connect every selected account to enable automatic publishing.</p>}</>}
       </section>
     </div>
   </div>;
+}
+
+function toLocalInput(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 16);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }

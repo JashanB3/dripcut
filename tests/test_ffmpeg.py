@@ -6,6 +6,7 @@ import io
 
 import pytest
 
+from dripcut.engines.ffmpeg.encoder import CapabilityEncoderProvider
 from dripcut.engines.ffmpeg.filters import (
     FilterGraph,
     ScaleMode,
@@ -145,6 +146,38 @@ def test_runner_respects_hardware_disabled_with_nvenc(monkeypatch) -> None:
     )
     runner = FFmpegRunner("ffmpeg", hardware_accel=False)
     assert runner.pick_video_encoder("h264") == "libx264"
+
+
+def test_encoder_provider_describes_apple_and_nvidia_hosts() -> None:
+    apple = CapabilityEncoderProvider(
+        lambda: frozenset({"h264_videotoolbox", "libx264"})
+    ).select("h264")
+    nvidia = CapabilityEncoderProvider(
+        lambda: frozenset({"h264_nvenc", "libx264"})
+    ).select("h264")
+
+    assert (apple.encoder, apple.provider, apple.hardware) == (
+        "h264_videotoolbox",
+        "apple_videotoolbox",
+        True,
+    )
+    assert (nvidia.encoder, nvidia.provider, nvidia.hardware) == (
+        "h264_nvenc",
+        "nvidia_nvenc",
+        True,
+    )
+
+
+def test_encoder_provider_uses_software_when_hardware_is_disabled() -> None:
+    provider = CapabilityEncoderProvider(
+        lambda: frozenset({"h264_nvenc", "libx264"})
+    )
+
+    selected = provider.select("h264", hardware=False)
+
+    assert selected.encoder == "libx264"
+    assert selected.provider == "software"
+    assert selected.hardware is False
 
 
 def test_runner_retries_with_software_encoder(monkeypatch) -> None:

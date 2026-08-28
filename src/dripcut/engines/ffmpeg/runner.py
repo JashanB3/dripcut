@@ -22,6 +22,11 @@ from pathlib import Path
 
 from dripcut.core.errors import DependencyError, FFmpegError
 from dripcut.core.logging import get_logger
+from dripcut.engines.ffmpeg.encoder import (
+    CapabilityEncoderProvider,
+    EncoderProvider,
+    EncoderSelection,
+)
 from dripcut.utils.concurrency import CancelToken, OperationCancelled, Throttle
 
 __all__ = ["FFmpegRunner", "ProgressCallback", "FFmpegResult"]
@@ -57,6 +62,7 @@ class FFmpegRunner:
         *,
         hardware_accel: bool = True,
         overwrite: bool = True,
+        encoder_provider: EncoderProvider | None = None,
     ) -> None:
         """
         Args:
@@ -69,6 +75,9 @@ class FFmpegRunner:
         self.overwrite = overwrite
         self._encoders: frozenset[str] | None = None
         self._filters: frozenset[str] | None = None
+        self.encoder_provider = encoder_provider or CapabilityEncoderProvider(
+            self.available_encoders
+        )
 
     # ---------------------------------------------------------------- availability
 
@@ -159,29 +168,15 @@ class FFmpegRunner:
         return name in filters if filters else True
 
     def pick_video_encoder(self, codec: str, *, hardware: bool | None = None) -> str:
-        """Choose the best encoder for a logical codec name.
+        """Choose the best concrete encoder for a logical codec name."""
+        return self.encoder_selection(codec, hardware=hardware).encoder
 
-        Apple builds usually expose VideoToolbox; AWS GPU workers usually expose
-        NVIDIA NVENC. Prefer whichever the local FFmpeg build reports, then fall
-        back to portable software encoders.
-        """
+    def encoder_selection(
+        self, codec: str = "h264", *, hardware: bool | None = None
+    ) -> EncoderSelection:
+        """Describe the active host encoder for health and operations reporting."""
         use_hw = self.hardware_accel if hardware is None else hardware
-        table = {
-            "h264": (("h264_videotoolbox", "h264_nvenc"), "libx264"),
-            "hevc": (("hevc_videotoolbox", "hevc_nvenc"), "libx265"),
-            "h265": (("hevc_videotoolbox", "hevc_nvenc"), "libx265"),
-            "vp9": ((), "libvpx-vp9"),
-            "av1": ((), "libsvtav1"),
-            "prores": ((), "prores_ks"),
-        }
-        hw_names, sw_name = table.get(codec.lower(), ((), codec))
-        if use_hw:
-            for hw_name in hw_names:
-                if self.has_encoder(hw_name):
-                    return hw_name
-        if sw_name and self.has_encoder(sw_name):
-            return sw_name
-        return "libx264"
+        return self.encoder_provider.select(codec, hardware=use_hw)
 
     # ---------------------------------------------------------------------- running
 

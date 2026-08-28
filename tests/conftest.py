@@ -29,11 +29,17 @@ def app_home(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def isolated_paths(monkeypatch: pytest.MonkeyPatch, app_home: Path, tmp_path: Path) -> None:
-    """Point every path helper at temporary directories."""
+    """Point every path helper at temporary directories and local test providers."""
     from dripcut.core.paths import app_paths
 
     monkeypatch.setenv("DRIPCUT_HOME", str(app_home))
     monkeypatch.setenv("DRIPCUT_OUTPUT", str(tmp_path / "out"))
+    # A developer's live Supabase .env must not turn unit tests into networked
+    # integration tests. Security suites opt back into auth explicitly.
+    monkeypatch.setenv("DRIPCUT_ENV", "development")
+    monkeypatch.setenv("DRIPCUT_AUTH_PROVIDER", "local")
+    monkeypatch.setenv("DRIPCUT_TENANT_PROVIDER", "local")
+    monkeypatch.setenv("DRIPCUT_AUTH_REQUIRED", "0")
     app_paths.cache_clear()
     yield
     app_paths.cache_clear()

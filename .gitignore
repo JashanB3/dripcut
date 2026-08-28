@@ -20,3 +20,6 @@ htmlcov/
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
+web/.e2e/
+web/playwright-report/
+web/test-results/

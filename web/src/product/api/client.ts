@@ -1,13 +1,18 @@
 import type {
+  AdminOverview,
   ApiArtifact,
   ApiJob,
   ApiProject,
   AIEditPlan,
+  AiRecommendation,
   OutputFormat,
   Platform,
   SavedSchedule,
   SocialConnection,
+  SocialMetadataPackage,
   SourceAsset,
+  UsageSummary,
+  ThumbnailGeneration,
 } from "../models";
 
 interface SourcePayload {
@@ -77,6 +82,24 @@ interface ProjectPayload {
   captions_enabled: boolean;
   workflow_route: ApiProject["workflowRoute"];
   source?: SourcePayload;
+}
+
+interface UsageSummaryPayload {
+  plan: string;
+  plan_label: string;
+  period_start: string;
+  period_end: string;
+  reset_at: string;
+  metrics: Array<{
+    key: string;
+    label: string;
+    used: number;
+    reserved: number;
+    limit: number | null;
+    unit: string;
+    percent: number;
+    unlimited: boolean;
+  }>;
 }
 
 export class ApiError extends Error {
@@ -201,7 +224,17 @@ export async function requestJson<T>(path: string, init: RequestInit = {}, timeo
   const controller = new AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(apiUrl(path), { ...init, signal: controller.signal });
+    let response = await fetch(apiUrl(path), { ...init, credentials: "include", signal: controller.signal });
+    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+      const refreshed = await fetch(apiUrl("/api/auth/refresh"), {
+        method: "POST",
+        credentials: "include",
+        signal: controller.signal,
+      });
+      if (refreshed.ok) {
+        response = await fetch(apiUrl(path), { ...init, credentials: "include", signal: controller.signal });
+      }
+    }
     if (import.meta.env.DEV) {
       console.debug("[DripCut API]", {
         method,
@@ -290,6 +323,7 @@ export async function uploadSource(file: File, onProgress?: (percent: number) =>
       return;
     }
     request.responseType = "text";
+    request.withCredentials = true;
     request.timeout = 120_000;
     request.upload.onprogress = (event) => {
       if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
@@ -355,6 +389,7 @@ export async function createClipJob(
     outputFormat: OutputFormat;
     autoCaptions: boolean;
     platforms: Platform[];
+    captionStyle?: "clean" | "dynamic" | "minimal" | "bold";
   },
 ): Promise<ApiJob> {
   const payload = await requestJson<JobPayload>("/api/jobs/clips", {
@@ -366,6 +401,7 @@ export async function createClipJob(
       output_format: options.outputFormat,
       portrait_mode: "center_crop",
       auto_captions: options.autoCaptions,
+      caption_style: options.captionStyle ?? "clean",
       platforms: options.platforms,
       fast_mode: true,
     }),
@@ -398,6 +434,56 @@ export async function fetchProjects(limit = 20): Promise<ApiProject[]> {
   return (await requestJson<ProjectPayload[]>(`/api/projects?limit=${limit}`, { cache: "no-store" })).map(projectFromPayload);
 }
 
+export async function fetchUsage(): Promise<UsageSummary> {
+  const payload = await requestJson<UsageSummaryPayload>("/api/usage", { cache: "no-store" });
+  return {
+    plan: payload.plan,
+    planLabel: payload.plan_label,
+    periodStart: payload.period_start,
+    periodEnd: payload.period_end,
+    resetAt: payload.reset_at,
+    metrics: payload.metrics,
+  };
+}
+
+export async function fetchAdminOverview(): Promise<AdminOverview> {
+  const payload = await requestJson<{
+    metrics: Record<string, number>;
+    users: Array<{ id: string; email: string; name: string; workspace_id: string; role: string; created_at: string; last_active_at: string }>;
+    jobs: Array<{ id: string; title: string; status: string; stage: string; project_id: string; error_code: string; error_message: string; created_at: string; elapsed_seconds: number }>;
+    errors: Array<{ id: string; title: string; status: string; stage: string; project_id: string; error_code: string; error_message: string; created_at: string; elapsed_seconds: number }>;
+    usage: Array<{ metric: string; quantity: number; unit: string }>;
+    generated_at: string;
+  }>("/api/admin/overview", { cache: "no-store" });
+  const mapJob = (job: (typeof payload.jobs)[number]) => ({
+    id: job.id,
+    title: job.title,
+    status: job.status,
+    stage: job.stage,
+    projectId: job.project_id,
+    errorCode: job.error_code,
+    errorMessage: job.error_message,
+    createdAt: job.created_at,
+    elapsedSeconds: job.elapsed_seconds,
+  });
+  return {
+    metrics: payload.metrics,
+    users: payload.users.map((user) => ({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      workspaceId: user.workspace_id,
+      role: user.role,
+      createdAt: user.created_at,
+      lastActiveAt: user.last_active_at,
+    })),
+    jobs: payload.jobs.map(mapJob),
+    errors: payload.errors.map(mapJob),
+    usage: payload.usage,
+    generatedAt: payload.generated_at,
+  };
+}
+
 export async function getProject(projectId: string): Promise<ApiProject> {
   const payload = await requestJson<ProjectPayload>(`/api/projects/${encodeURIComponent(projectId)}`, {
     cache: "no-store",
@@ -409,13 +495,39 @@ export async function createThumbnailCandidates(
   projectId: string,
   prompt: string,
   target: Platform,
-): Promise<ApiArtifact[]> {
-  const payload = await requestJson<ArtifactPayload[]>(`/api/projects/${encodeURIComponent(projectId)}/thumbnails`, {
+): Promise<ThumbnailGeneration> {
+  const payload = await requestJson<{
+    candidates: ArtifactPayload[];
+    brief: {
+      headline: string;
+      visual_focus: string;
+      emotion: string;
+      composition: string;
+      frame_guidance: string;
+      avoid: string[];
+    };
+    ranking: Array<{ artifact_id: string; score: number; reason: string }>;
+  }>(`/api/projects/${encodeURIComponent(projectId)}/thumbnails`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt, target }),
   });
-  return payload.map(artifactFromPayload);
+  return {
+    candidates: payload.candidates.map(artifactFromPayload),
+    brief: {
+      headline: payload.brief.headline,
+      visualFocus: payload.brief.visual_focus,
+      emotion: payload.brief.emotion,
+      composition: payload.brief.composition,
+      frameGuidance: payload.brief.frame_guidance,
+      avoid: payload.brief.avoid,
+    },
+    ranking: payload.ranking.map((item) => ({
+      artifactId: item.artifact_id,
+      score: item.score,
+      reason: item.reason,
+    })),
+  };
 }
 
 export async function createAIEditPlan(sourceId: string, prompt: string): Promise<AIEditPlan> {
@@ -426,6 +538,12 @@ export async function createAIEditPlan(sourceId: string, prompt: string): Promis
     segments: Array<{ id: string; index: number; start: number; end: number; strategy: "standard" | "ai" }>;
     output_format: OutputFormat;
     auto_captions: boolean;
+    platform: Platform;
+    selection: "standard" | "viral";
+    count: number;
+    duration: number;
+    caption_style: AIEditPlan["captionStyle"];
+    reframe: AIEditPlan["reframe"];
   }>("/api/ai/edit-plan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -438,7 +556,89 @@ export async function createAIEditPlan(sourceId: string, prompt: string): Promis
     segments: payload.segments.map((segment) => ({ ...segment, duration: segment.end - segment.start })),
     outputFormat: payload.output_format,
     autoCaptions: payload.auto_captions,
+    platform: payload.platform,
+    selection: payload.selection,
+    count: payload.count,
+    duration: payload.duration,
+    captionStyle: payload.caption_style,
+    reframe: payload.reframe,
   };
+}
+
+export async function generateSocialMetadata(
+  projectId: string,
+  artifactId?: string,
+): Promise<SocialMetadataPackage> {
+  const payload = await requestJson<{
+    project_id: string;
+    artifact_id?: string;
+    youtube_title: string;
+    youtube_description: string;
+    youtube_hashtags: string[];
+    instagram_caption: string;
+    instagram_hashtags: string[];
+    instagram_cta: string;
+    hook: string;
+    category: string;
+    posting_description: string;
+  }>(`/api/projects/${encodeURIComponent(projectId)}/social-metadata`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ artifact_id: artifactId }),
+  });
+  return {
+    projectId: payload.project_id,
+    artifactId: payload.artifact_id,
+    youtubeTitle: payload.youtube_title,
+    youtubeDescription: payload.youtube_description,
+    youtubeHashtags: payload.youtube_hashtags,
+    instagramCaption: payload.instagram_caption,
+    instagramHashtags: payload.instagram_hashtags,
+    instagramCta: payload.instagram_cta,
+    hook: payload.hook,
+    category: payload.category,
+    postingDescription: payload.posting_description,
+  };
+}
+
+export async function findViralMoments(
+  sourceId: string,
+  platform: Platform,
+  targetLength: number,
+  maxClips: number,
+): Promise<AiRecommendation[]> {
+  const payload = await requestJson<{
+    segments: Array<{
+      id: string;
+      start: number;
+      end: number;
+      score: number;
+      hook_score: number;
+      retention_score: number;
+      shareability_score: number;
+      reason: string;
+      hook: string;
+    }>;
+  }>(`/api/sources/${encodeURIComponent(sourceId)}/viral-moments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      platform,
+      target_length: targetLength,
+      max_clips: maxClips,
+    }),
+  });
+  return payload.segments.map((segment) => ({
+    id: segment.id,
+    start: segment.start,
+    end: segment.end,
+    score: segment.score,
+    reason: segment.reason,
+    label: segment.hook || segment.reason,
+    hookScore: segment.hook_score,
+    retentionScore: segment.retention_score,
+    shareabilityScore: segment.shareability_score,
+  }));
 }
 
 export async function fetchSocialConnections(): Promise<SocialConnection[]> {
@@ -448,6 +648,21 @@ export async function fetchSocialConnections(): Promise<SocialConnection[]> {
   return payload.map((item) => ({ ...item, setupHint: item.setup_hint }));
 }
 
+export async function beginSocialOAuth(platform: Platform): Promise<string> {
+  const payload = await requestJson<{ platform: Platform; authorization_url: string }>(
+    `/api/social/${encodeURIComponent(platform)}/authorize`,
+    { cache: "no-store" },
+  );
+  return payload.authorization_url;
+}
+
+export async function disconnectSocial(platform: Platform): Promise<void> {
+  await requestJson<{ platform: Platform; disconnected: boolean }>(
+    `/api/social/${encodeURIComponent(platform)}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function saveSchedule(input: {
   projectId: string;
   platforms: Platform[];
@@ -455,11 +670,7 @@ export async function saveSchedule(input: {
   startAt: string;
   caption: string;
 }): Promise<SavedSchedule> {
-  const payload = await requestJson<{
-    id: string; project_id: string; archive_name: string; created_at: number;
-    posts: Array<{ platform: Platform; clip_name: string; publish_at: string; caption: string; status: string }>;
-    publish_ready: boolean;
-  }>("/api/schedules", {
+  const payload = await requestJson<SchedulePayload>("/api/schedules", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -470,20 +681,67 @@ export async function saveSchedule(input: {
       caption: input.caption,
     }),
   });
+  return scheduleFromPayload(payload);
+}
+
+type SchedulePayload = {
+  id: string; project_id: string; archive_name: string; created_at: number;
+  posts: Array<{
+    id: string; platform: Platform; clip_name: string; publish_at: string; caption: string;
+    status: string; external_post_id?: string; error_message?: string;
+  }>;
+  publish_ready: boolean;
+};
+
+function scheduleFromPayload(payload: SchedulePayload): SavedSchedule {
   return {
     id: payload.id,
     projectId: payload.project_id,
     archiveName: payload.archive_name,
     createdAt: payload.created_at,
     posts: payload.posts.map((post) => ({
+      id: post.id,
       platform: post.platform,
       clipName: post.clip_name,
       publishAt: post.publish_at,
       caption: post.caption,
       status: post.status,
+      externalPostId: post.external_post_id,
+      errorMessage: post.error_message,
     })),
     publishReady: payload.publish_ready,
   };
+}
+
+export async function fetchSchedule(scheduleId: string): Promise<SavedSchedule> {
+  const payload = await requestJson<SchedulePayload>(
+    `/api/schedules/${encodeURIComponent(scheduleId)}`,
+    { cache: "no-store" },
+  );
+  return scheduleFromPayload(payload);
+}
+
+export async function fetchLatestSchedule(): Promise<SavedSchedule | null> {
+  const payload = await requestJson<SchedulePayload | null>("/api/schedules/latest", {
+    cache: "no-store",
+  });
+  return payload ? scheduleFromPayload(payload) : null;
+}
+
+export async function updateScheduledPost(
+  scheduleId: string,
+  postId: string,
+  update: { publishAt?: string; caption?: string },
+): Promise<SavedSchedule> {
+  const payload = await requestJson<SchedulePayload>(
+    `/api/schedules/${encodeURIComponent(scheduleId)}/posts/${encodeURIComponent(postId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ publish_at: update.publishAt, caption: update.caption }),
+    },
+  );
+  return scheduleFromPayload(payload);
 }
 
 export async function getClipJob(jobId: string): Promise<ApiJob> {

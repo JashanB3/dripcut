@@ -18,7 +18,12 @@ cd web
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173/#/auto-clip`.
+Open `http://127.0.0.1:5173/signup`, create a local development account, then
+open `http://127.0.0.1:5173/auto-clip`.
+
+Authentication is required by default. Local development uses the signed,
+file-backed local provider below `DRIPCUT_HOME`; production refuses to start
+with that provider. See [SaaS foundation](saas-foundation.md) for Supabase setup.
 
 ## Storage
 

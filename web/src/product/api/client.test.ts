@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createClipJob, parseApiResponse, requestJson } from "./client";
+import { createClipJob, fetchAdminOverview, fetchUsage, parseApiResponse, requestJson } from "./client";
 
 const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -64,6 +64,13 @@ describe("requestJson", () => {
       message: "Unable to reach the DripCut processing server.",
     }));
   });
+
+  it("includes HttpOnly session cookies on API requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    await requestJson("/api/session-test");
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: "include" });
+  });
 });
 
 describe("createClipJob", () => {
@@ -94,6 +101,59 @@ describe("createClipJob", () => {
       portrait_mode: "center_crop",
       fast_mode: true,
       auto_captions: true,
+      caption_style: "clean",
     });
+  });
+});
+
+describe("fetchUsage", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("maps the backend plan summary into product models", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      plan: "free",
+      plan_label: "Free",
+      period_start: "2026-08-01T00:00:00+00:00",
+      period_end: "2026-09-01T00:00:00+00:00",
+      reset_at: "2026-09-01T00:00:00+00:00",
+      metrics: [{
+        key: "video_processing_minutes",
+        label: "Video processing",
+        used: 4,
+        reserved: 1,
+        limit: 10,
+        unit: "minutes",
+        percent: 50,
+        unlimited: false,
+      }],
+    })));
+
+    await expect(fetchUsage()).resolves.toMatchObject({
+      plan: "free",
+      planLabel: "Free",
+      resetAt: "2026-09-01T00:00:00+00:00",
+      metrics: [{ used: 4, reserved: 1, limit: 10 }],
+    });
+  });
+});
+
+describe("fetchAdminOverview", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("maps safe internal operations data", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      metrics: { total_users: 3, failed_jobs: 1 },
+      users: [{ id: "user-1", email: "creator@example.test", name: "Creator", workspace_id: "workspace-1", role: "owner", created_at: "2026-08-01T00:00:00Z", last_active_at: "2026-08-29T00:00:00Z" }],
+      jobs: [{ id: "job-1", title: "Render", status: "failed", stage: "Encoding", project_id: "project-1", error_code: "RENDER_FAILED", error_message: "Encode stopped", created_at: "2026-08-29T00:00:00Z", elapsed_seconds: 12.4 }],
+      errors: [],
+      usage: [{ metric: "video_processing_minutes", quantity: 5, unit: "minutes" }],
+      generated_at: "2026-08-29T00:00:00Z",
+    })));
+
+    const overview = await fetchAdminOverview();
+
+    expect(overview.metrics.total_users).toBe(3);
+    expect(overview.users[0].workspaceId).toBe("workspace-1");
+    expect(overview.jobs[0].errorCode).toBe("RENDER_FAILED");
   });
 });

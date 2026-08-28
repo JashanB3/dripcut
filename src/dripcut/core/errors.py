@@ -18,6 +18,8 @@ __all__ = [
     "SplitPlanError",
     "TranscriptionError",
     "ModelUnavailableError",
+    "AIProviderError",
+    "SocialProviderError",
     "ExportError",
     "PluginError",
     "ProjectError",
@@ -85,6 +87,18 @@ class TranscriptionError(DripCutError):
 
 class ModelUnavailableError(DependencyError):
     """A local model (Whisper weights, Ollama model) is not installed."""
+
+
+class AIProviderError(DripCutError):
+    """A structured editorial AI request failed validation or transport."""
+
+    code = "AI_UNAVAILABLE"
+
+
+class SocialProviderError(DripCutError):
+    """An official social OAuth or publishing request failed safely."""
+
+    code = "SOCIAL_PROVIDER_ERROR"
 
 
 class ExportError(DripCutError):

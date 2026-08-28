@@ -1,201 +1,203 @@
 # DripCut
 
-**Local video toolkit with AI on board.**
+DripCut turns one long video into ready-to-post Shorts and Reels. Creators can upload a
+video or paste a YouTube URL, choose clip duration and count, optionally use AI to find
+strong moments, render captions and portrait video, download a ZIP, and schedule posts.
 
-A desktop video-processing suite that runs entirely on your machine. Split, trim, convert,
-caption, and export video without uploading a single frame anywhere. Transcription runs on
-Faster-Whisper; analysis runs on Ollama. No cloud APIs, no accounts, no per-minute billing.
+Standard sequential clipping is the default and never requires AI.
 
-AI is one module, not the point. Every video tool works with AI switched off.
+## Product Flow
 
----
+```text
+Upload video / paste YouTube URL
+              |
+Choose duration and clip count
+              |
+Standard equal clips OR optional AI viral moments
+              |
+Shared render, captions and thumbnail pipeline
+              |
+Download private ZIP OR schedule through official APIs
+```
 
-## Status
+## Current Foundation
 
-> **Release candidate 1.0.0rc1.** Feature-complete, 222 tests passing, fully
-> documented. See **[PROJECT_STATE.md](PROJECT_STATE.md)** for the inventory and
-> **[CHANGELOG.md](CHANGELOG.md)** for what is and is not verified.
+- Email/password authentication and Google OAuth architecture
+- Provider-neutral local and Supabase authentication
+- Workspace ownership checks plus PostgreSQL row-level security
+- Real project history, usage allowances, quota reservations and refunds
+- Local development storage plus private S3/R2 object storage and signed URLs
+- Durable local queue contract with idempotency, retries, progress and restart recovery
+- Standard clipping, scene/silence/timestamp planning and optional AI recommendations
+- Groq transcription with local Faster-Whisper fallback
+- NVIDIA content analysis with Ollama fallback
+- Real FFmpeg landscape, square and 1080x1920 portrait rendering
+- Phone-safe burned captions, original templates, AI metadata and thumbnail ranking
+- Official YouTube and Instagram OAuth/publishing provider boundaries
+- Read-only internal admin operations area with a separate global admin role
+- Structured request logs, normalized errors, rate limits, upload validation and CSRF checks
+- Unit, integration and real-browser E2E checks in GitHub Actions
 
-| | |
-|---|---|
-| Version | `1.0.0rc1` |
-| Files written | 83 under `src/` (~11,600 lines Python, 863 CSS, 622 JS) |
-| Compile | ✅ `python -m compileall src` clean |
-| Imports | ✅ 78/78 modules, zero failures |
-| Lint | ✅ `ruff check src` — all checks passed |
-| Client script | ✅ `node --check app.js` clean |
-| Packaging | ✅ builds `dripcut-1.0.0-py3-none-any.whl` |
-| Launchable | ✅ `dripcut up` serves all ten pages |
-| Pages | ✅ 10 of 10, every handler executed |
-| Tests | ✅ 222 passing |
-
-**The ten pages:** Dashboard, Workspace (9 tools), Split (6 modes), AI Studio,
-Subtitle Studio, Batch, Exports (live queue), Projects, Plugins, Settings.
-
-**Documentation:** [ARCHITECTURE](ARCHITECTURE.md) · [INSTALL](INSTALL.md) ·
-[DEVELOPMENT](DEVELOPMENT.md) · [PLUGIN_GUIDE](PLUGIN_GUIDE.md) ·
-[CHANGELOG](CHANGELOG.md)
-
-**Not yet verified on real hardware:** Whisper transcription and Ollama analysis.
-Both are written against the engine APIs and covered through their cache, guard and
-fallback paths, but the build environment cannot download a Whisper model or run
-Ollama. VideoToolbox detection is tested; the encode path is not.
+The classic local Gradio/CLI application remains available. The React/FastAPI product is the
+multi-user SaaS path described below.
 
 ## Requirements
 
-- macOS (tuned for Apple Silicon; VideoToolbox is used when present) or Linux
-- Python 3.10+ — developed against 3.13
+- Python 3.10 to 3.13
+- Node.js 22+
 - FFmpeg and FFprobe on `PATH`
-- [Ollama](https://ollama.com) with a small local model, for AI features only:
-  ```bash
-  ollama pull qwen2.5:3b
-  ```
+- macOS or Linux
+- Docker for container verification/deployment
 
-Ollama is optional. Without it, AI features report themselves unavailable and everything
-else keeps working.
+Optional providers are configured entirely on the backend. No server secret may use a
+`VITE_` prefix.
 
-## Install
+## Local Setup
 
 ```bash
-git clone <repo> dripcut && cd dripcut
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-```
-
-This registers a global `dripcut` command via `[project.scripts]`.
-
-## Usage
-
-```bash
-dripcut                                   # launch the app at http://127.0.0.1:7999
-dripcut up --port 8080 --no-browser       # launch elsewhere, don't open a browser
-dripcut doctor                            # 20 environment checks with fixes
-dripcut info video.mp4                    # probe a file, or omit it for paths
-dripcut split video.mp4 --mode scene      # plan and render clips
-dripcut split video.mp4 --length 30 --dry-run
-dripcut transcribe video.mp4 --format srt --show 12
-dripcut export video.mp4 --preset "Vertical 1080x1920"
-dripcut plugins --disable loudness
-dripcut config --set server.port=8080
-```
-
-Start with `dripcut doctor`. It checks Python, FFmpeg, FFprobe, VideoToolbox,
-Faster Whisper, Ollama, folders, write permissions and free space, and every failure
-comes with the command that fixes it.
-
-## Keyboard
-
-| Key | Action |
-|---|---|
-| `⌘K` | Command palette |
-| `⌘\` | Collapse or show the sidebar |
-| `⌘⇧T` | Switch theme |
-| `⌘↵` | Run the current page's primary action |
-| `J` `K` `L` | Previous · play · next |
-| `?` | Shortcut list |
-| `esc` | Close overlays |
-
-Click any timecode to copy it. Drag the sidebar's trailing edge to resize it;
-double-click to reset.
-
-## Features
-
-**Video tools** — upload, preview, trim, cut, split, merge, crop, resize, rotate, flip,
-compress, convert container, change FPS, change resolution, speed adjust, extract audio,
-extract frames, create GIF, image and text watermarks, proxy generation, thumbnails, batch
-processing.
-
-**Split modes** — fixed length · custom length (15/30/45/60s, 2min, 5min) · scene detection ·
-silence detection · explicit timestamps · embedded chapters · AI highlight. Switching modes
-re-plans without re-rendering.
-
-**AI module** — Whisper transcription with disk caching, transcript viewer and editor,
-highlight detection, hook detection, funny / educational / story-peak focus rubrics, best-clip
-finder, title suggestions, summaries, chapter suggestions. Every LLM call has a heuristic
-fallback, so a missing model degrades quality rather than breaking the feature.
-
-**Subtitles** — 6 caption presets (Clean, Punch, Plate, Signal, Documentary, Karaoke), cue
-re-flow from word-level timings, SRT / VTT / ASS / TXT output, soft-attach or burn-in.
-
-**Export** — 10 presets including vertical 1080×1920, square, landscape, ProRes master, WebM
-VP9, MKV passthrough, GIF, and audio-only. Threaded queue with live progress, cancellation,
-and persisted history.
-
-**Plugins** — drop a Python file in `~/Library/Application Support/DripCut/plugins/` or ship
-an entry point in the `dripcut.plugins` group. Plugins can add tools, split strategies, and
-caption styles. Three ship built in: contact sheet, loudness tools, social caption pack.
-
-## Architecture
-
-Clean layering, enforced by convention and documented in `src/dripcut/__init__.py`:
-
-```
-utils → core → models → engines → services → plugins → ui → cli
-```
-
-No inner layer imports an outer one. Everything is resolved through a DI container built in
-`core/bootstrap.py`. Long operations become `Job` objects on a two-worker queue and report
-progress over an event bus, so the UI never blocks and never owns business logic.
-
-```
-src/dripcut/
-├── core/       settings · paths · errors · logging · events · container · bootstrap
-├── models/     media · clip · transcript · subtitle · job · project
-├── engines/    ffmpeg · video · split · ai · subtitle · export
-├── services/   media · project · ai · split · subtitle · export · notifications
-├── plugins/    api · loader · builtin/
-├── ui/         theme · assets · components/ · pages/  (10 pages)
-└── cli/        launcher · doctor · subcommands
-```
-
-Third-party media and AI libraries are imported lazily inside functions. Startup stays fast,
-and a missing optional dependency surfaces as a friendly message instead of an import crash.
-
-## Design
-
-Not the default Gradio look. Midnight-ink slate-blue base (`#111524`) with electric-blue to
-violet accents (`#5B8CFF` → `#7A5BFF`), mint for success, amber for warnings, plus a full
-light theme. System font stacks only — no web fonts, because the app has to work offline.
-
-The signature element is the **sprocket rail**: a filmstrip-notched progress and segment strip
-that carries monospaced timecodes as a recurring typographic motif. Keyboard focus is always
-visible and `prefers-reduced-motion` is respected.
-
-## Development
-
-```bash
-make install     # pip install -e .
-make dev         # pip install -e ".[dev]"
-make lint        # ruff check src
-make fmt         # ruff format
-make type        # mypy
-make test        # pytest              (suite not written yet)
-make run         # dripcut up
-make clean
-```
-
-## Configuration
-
-Settings live at `~/Library/Application Support/DripCut/settings.json` (macOS) and can be
-overridden by environment variables:
-
-### Hosted transcription
-
-The web processing backend uses Groq `whisper-large-v3-turbo` as its primary speech
-provider when `GROQ_API_KEY` is configured. Credentials are read only by Python on the
-backend; never prefix the key with `VITE_`. If Groq is unavailable, the existing local
-Faster-Whisper provider remains the fallback.
-
-```bash
+cd /Users/jashan/Documents/DripCut/dripcut
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
 cp .env.example .env
-# Set GROQ_API_KEY in .env, then restart the backend.
 ```
 
-Transcripts are normalized and cached by source-content SHA-256, language, provider,
-model, and provider version. Re-importing the same bytes under a different filename still
-reuses the transcript.
+Start the authenticated local API:
 
-Run the repeatable pipeline benchmark with an approximately ten-minute spoken video:
+```bash
+cd /Users/jashan/Documents/DripCut/dripcut
+source .venv/bin/activate
+python -m uvicorn dripcut.api.app:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+Start the React app in a second terminal:
+
+```bash
+cd /Users/jashan/Documents/DripCut/dripcut/web
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173/signup`. Local accounts, workspaces, projects, jobs and usage
+persist under `DRIPCUT_HOME`. Local authentication is development-only and is rejected when
+`DRIPCUT_ENV=production`.
+
+If a port is already occupied:
+
+```bash
+lsof -nP -iTCP:5173 -sTCP:LISTEN
+lsof -nP -iTCP:8000 -sTCP:LISTEN
+```
+
+Stop only the displayed DripCut process, or start Vite on another port with
+`npm run dev -- --port 5174`.
+
+## Standard and AI Clipping
+
+The Auto Clip screen starts in standard mode. A ten-minute source with 60-second duration
+offers ten complete clips through `MAX`; incomplete tail segments are not silently rendered.
+The timeline shows clip boundaries and previews before processing.
+
+“Find Viral Moments with AI” is an optional selection strategy. It overlays scored moments
+on the same source timeline and feeds accepted segments into the same rendering pipeline as
+standard clips. AI output is schema-validated and cannot execute shell commands or arbitrary
+FFmpeg arguments.
+
+## SaaS Providers
+
+Production startup fails closed unless Supabase is configured:
+
+```dotenv
+DRIPCUT_ENV=production
+DRIPCUT_AUTH_PROVIDER=supabase
+DRIPCUT_TENANT_PROVIDER=supabase
+DRIPCUT_USAGE_PROVIDER=supabase
+DRIPCUT_SOCIAL_STORE=supabase
+DRIPCUT_AUTH_REQUIRED=1
+DRIPCUT_COOKIE_SECURE=1
+DRIPCUT_FRONTEND_URL=https://app.example.com
+DRIPCUT_ALLOWED_ORIGINS=https://app.example.com
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-public-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-server-only-service-role-key
+```
+
+Run every file in [`supabase/migrations`](supabase/migrations) in filename order. Full setup,
+redirect URLs and security notes are in
+[`docs/saas-foundation.md`](docs/saas-foundation.md).
+
+### Private Media Storage
+
+```dotenv
+DRIPCUT_STORAGE_PROVIDER=s3
+DRIPCUT_STORAGE_BUCKET=dripcut-production
+DRIPCUT_STORAGE_PREFIX=media
+AWS_REGION=ap-south-1
+AWS_ACCESS_KEY_ID=server-only-access-key
+AWS_SECRET_ACCESS_KEY=server-only-secret
+```
+
+Use `r2` and set `DRIPCUT_STORAGE_ENDPOINT_URL` for Cloudflare R2. Buckets remain private;
+the API returns short-lived signed URLs after ownership checks. PostgreSQL stores metadata,
+not video binaries.
+
+### AI and Transcription
+
+```dotenv
+GROQ_API_KEY=server-secret
+DRIPCUT_TRANSCRIPTION_PROVIDER=groq
+DRIPCUT_AI_PROVIDER=auto
+NVIDIA_API_KEY=server-secret
+DRIPCUT_NVIDIA_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
+DRIPCUT_OLLAMA_HOST=http://127.0.0.1:11434
+DRIPCUT_OLLAMA_MODEL=qwen2.5:3b
+```
+
+Groq `whisper-large-v3-turbo` is the primary hosted transcription provider. Cached normalized
+transcripts prevent repeated provider work. NVIDIA is the primary configured content-analysis
+provider; Ollama is the local fallback. Basic clipping remains operational when both are absent.
+
+### Social Publishing
+
+Official Google and Meta application credentials are required. Register these backend callback
+URLs and never ask users for platform passwords:
+
+```text
+https://api.example.com/api/social/youtube/callback
+https://api.example.com/api/social/instagram/callback
+```
+
+Credentials and refresh tokens are encrypted server-side. Publishing runs through the durable
+scheduler and records `scheduled`, `uploading`, `published`, and `failed` states.
+
+### Internal Admin
+
+`/admin` is not granted to ordinary workspace owners. For local development, list explicit
+emails in the backend environment:
+
+```dotenv
+DRIPCUT_ADMIN_EMAILS=admin@example.com
+```
+
+For production, promote a verified profile in the Supabase SQL editor:
+
+```sql
+update public.profiles
+set is_dripcut_admin = true, updated_at = now()
+where email = 'admin@example.com';
+```
+
+Log out and back in after promotion. The read-only admin area shows aggregate users, projects,
+processing, jobs, failures, usage and publishing status. It never exposes credentials, cookies,
+prompts or private media and does not support impersonation.
+
+## Performance
+
+Local development defaults to two workers. The production image defaults to one safe worker;
+increase concurrency only after measuring CPU, memory and storage throughput. FFmpeg selects
+Apple VideoToolbox, NVIDIA NVENC or software encoding by capability and falls back safely.
+
+Benchmark the pipeline by stage:
 
 ```bash
 source .venv/bin/activate
@@ -203,36 +205,35 @@ python scripts/benchmark_pipeline.py /absolute/path/to/spoken-video.mp4 \
   --clip-duration 30 --count 3 --output-format portrait --runs 2
 ```
 
-The command reports source import, audio extraction, provider API, clip render, subtitle
-preparation, caption encoding, ZIP, and total times. The second run reports whether the
-transcript cache was hit. It exits with `CONFIGURATION REQUIRED` rather than presenting a
-local run as a Groq benchmark when the backend credential is missing.
+The operations API reports privacy-safe p50/p95 stage timings. Provider API and video encoding
+are separate concerns; configuring an AI API does not accelerate FFmpeg.
 
-| Variable | Default |
-|---|---|
-| `DRIPCUT_HOME` | `~/Library/Application Support/DripCut` |
-| `DRIPCUT_OUTPUT` | `~/Movies/DripCut` |
-| `DRIPCUT_PORT` | `7999` |
-| `DRIPCUT_HOST` | `127.0.0.1` |
-| `DRIPCUT_THEME` | `dark` |
-| `DRIPCUT_TRANSCRIPTION_PROVIDER` | `groq` |
-| `DRIPCUT_GROQ_TRANSCRIPTION_MODEL` | `whisper-large-v3-turbo` |
-| `DRIPCUT_WHISPER_MODEL` | `small` |
-| `DRIPCUT_OLLAMA_MODEL` | `qwen2.5:3b` |
-| `DRIPCUT_OLLAMA_HOST` | `http://127.0.0.1:11434` |
-| `DRIPCUT_MAX_WORKERS` | `2` |
-| `DRIPCUT_LOG_LEVEL` | `INFO` |
+## Validation
 
-Logs are written to `<DRIPCUT_HOME>/logs/dripcut.log` with rotation.
+Backend:
 
-## Render deployment
+```bash
+source .venv/bin/activate
+ruff check src tests scripts
+pytest
+python scripts/check_secrets.py
+```
 
-The repository includes a production `Dockerfile` for the Python processing API. It
-installs FFmpeg/FFprobe, yt-dlp with EJS support, and Node 22, runs as a non-root user,
-and binds Uvicorn to Render's `PORT`. The React frontend is deployed separately as a
-static site.
+Frontend:
 
-Build and run the same image locally:
+```bash
+cd web
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run test:e2e
+```
+
+The Playwright flow creates an account, uploads real generated media, renders a standard clip,
+downloads the ZIP, logs out, logs back in and verifies persisted project recovery.
+
+## Docker
 
 ```bash
 docker build -t dripcut-api .
@@ -240,57 +241,42 @@ docker run --rm -p 10000:10000 --env-file .env -e PORT=10000 dripcut-api
 curl http://127.0.0.1:10000/api/health
 ```
 
-Create a Render **Web Service** with these settings:
+The image runs as a non-root user, includes FFmpeg and Node for yt-dlp EJS, binds to `PORT`,
+forces production Supabase providers and uses one render worker by default. Deploy the React
+`web/dist` output separately and configure the static host to rewrite routes to `index.html`.
 
-| Setting | Value |
-|---|---|
-| Runtime | Docker |
-| Branch | `main` |
-| Root directory | repository root (leave blank) |
-| Dockerfile path | `./Dockerfile` |
-| Health check path | `/api/health` |
+Render and YouTube import diagnostics are documented in
+[`docs/web-processing-api.md`](docs/web-processing-api.md).
 
-Configure these backend environment variables in Render, not in the image or repository:
+## Security Model
 
-| Variable | Recommended value |
-|---|---|
-| `GROQ_API_KEY` | Render secret containing the Groq key |
-| `DRIPCUT_TRANSCRIPTION_PROVIDER` | `groq` |
-| `DRIPCUT_ALLOWED_ORIGINS` | exact deployed frontend origin, such as `https://dripcut.example` |
-| `DRIPCUT_MAX_WORKERS` | `1` for a 512 MB instance |
-| `DRIPCUT_HOME` | `/var/lib/dripcut` |
-| `DRIPCUT_YOUTUBE_POT_PROVIDER_URL` | private URL of the bgutil provider on port `4416` |
-| `DRIPCUT_YOUTUBE_SOCKET_TIMEOUT` | `30` |
+- HttpOnly, Secure, SameSite cookies in production
+- strict allowed-origin CORS and cookie-auth mutation Origin checks
+- workspace ownership checks before processing or download
+- Supabase RLS as a second authorization boundary
+- private object storage and short-lived signed URLs
+- upload size/MIME/container/duration validation through FFprobe
+- constrained YouTube URL validation and no arbitrary downloader sites
+- endpoint rate limits plus atomic quota reservations
+- OAuth state validation and encrypted social credentials
+- normalized user errors with technical diagnostics retained in logs
+- CI credential scanning and no frontend server secrets
 
-Set `VITE_API_BASE_URL=https://<your-backend>.onrender.com` on the frontend static site
-before building it. Do not expose `GROQ_API_KEY` through a `VITE_` variable.
+The included process-local rate limiter is appropriate for a single API instance. Replace it
+with a shared Redis-backed limiter before horizontally scaling.
 
-For reliable public YouTube imports from Render datacenter IPs, create a second
-Render **Private Service** from
-`brainicism/bgutil-ytdlp-pot-provider:1.3.2`, keep port `4416` private, and point
-`DRIPCUT_YOUTUBE_POT_PROVIDER_URL` at its private-network URL. The Python plugin
-is installed by the DripCut production image. See
-[`docs/web-processing-api.md`](docs/web-processing-api.md#render-production-configuration)
-for network requirements, safe diagnostics, and optional Secret File cookie fallback.
+## Classic CLI
 
-Render instances without a persistent disk have ephemeral storage. Uploaded/imported
-sources, rendered clips, transcript caches, ZIP archives, projects, job history, and
-schedules stored under `DRIPCUT_HOME` can disappear after a restart or redeploy. This is
-acceptable for a download-first beta, but durable multi-user deployment requires object
-storage and a persistent database. The 512 MB tier should run one render job at a time;
-Groq transcription is strongly recommended because local Faster-Whisper can exceed that
-memory budget.
+The existing local toolkit is preserved:
 
-## Privacy
+```bash
+dripcut doctor
+dripcut info video.mp4
+dripcut split video.mp4 --length 30 --dry-run
+dripcut transcribe video.mp4 --format srt
+dripcut export video.mp4 --preset "Vertical 1080x1920"
+```
 
-Verified against Gradio 6.20.0; the UI asks each Gradio signature what it accepts, so
-4.x and 5.x work too.
+## License
 
-DripCut sends extracted speech audio to Groq only when hosted transcription is configured
-and captions/transcription are requested. It may also contact YouTube during an explicitly
-requested import and Ollama for enabled local analysis. Backend credentials are never sent
-to the React application or returned by diagnostics. Telemetry remains disabled.
-
-## Licence
-
-MIT — see [LICENSE](LICENSE).
+MIT. See [`LICENSE`](LICENSE).

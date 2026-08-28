@@ -15,6 +15,7 @@ from dripcut.core.logging import get_logger
 from dripcut.core.paths import AppPaths
 from dripcut.engines.ai.analysis import AnalysisEngine, Chapter, Highlight, Hook
 from dripcut.engines.ai.llm import OllamaClient
+from dripcut.engines.ai.provider import AIProvider, Platform, ViralMomentAnalysis
 from dripcut.engines.ai.transcription import TranscriptionEngine
 from dripcut.engines.ai.transcription_provider import (
     GroqTranscriptionProvider,
@@ -48,6 +49,7 @@ class AIService:
         settings: Settings,
         paths: AppPaths,
         groq_transcription: GroqTranscriptionProvider | None = None,
+        content_provider: AIProvider | None = None,
     ) -> None:
         self.transcription = transcription
         self.analysis = analysis
@@ -57,6 +59,7 @@ class AIService:
         self.paths = paths
         self.local_transcription = LocalTranscriptionProvider(transcription)
         self.groq_transcription = groq_transcription
+        self.content_provider = content_provider
         self._lock = threading.Lock()
         self._hashes: dict[tuple[str, int, int], str] = {}
 
@@ -84,6 +87,7 @@ class AIService:
             "ollama_model": self.settings.ai.ollama_model,
             "ollama_model_installed": self.llm.has_model() if server_up else False,
             "models_installed": self.llm.list_models() if server_up else [],
+            "content_ai": self.content_provider.health() if self.content_provider else None,
         }
 
     def prepare(self) -> bool:
@@ -286,6 +290,63 @@ class AIService:
             EventName.ANALYSIS_READY, kind="highlights", count=len(highlights), focus=focus
         )
         return highlights
+
+    def find_viral_moments(
+        self,
+        transcript: Transcript,
+        *,
+        platform: Platform,
+        target_length: float = 45.0,
+        max_clips: int = 8,
+        metadata: dict[str, str] | None = None,
+    ) -> ViralMomentAnalysis:
+        """Run platform-aware hosted/local analysis and cache the strict result."""
+        if self.content_provider is None:
+            raise ModelUnavailableError("Editorial AI is not configured.")
+        digest = hashlib.sha256(transcript.text.encode("utf-8")).hexdigest()
+        version = str(
+            getattr(self.content_provider, "analysis_version", "viral-v1")
+        )
+        identity = hashlib.sha256(
+            (
+                f"{digest}:{platform}:{version}:{self.content_provider.name}:"
+                f"{self.content_provider.model}:{target_length}:{max_clips}"
+            ).encode()
+        ).hexdigest()
+        cache_file = ensure_dir(self.paths.cache / "ai-analyses") / f"{identity}.json"
+        if cache_file.is_file():
+            try:
+                return ViralMomentAnalysis.model_validate_json(
+                    cache_file.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                cache_file.unlink(missing_ok=True)
+
+        timestamped = "\n".join(
+            f"[{segment.start:.3f}-{segment.end:.3f}] {segment.text.strip()}"
+            for segment in transcript.segments
+            if segment.text.strip()
+        )
+        result = self.content_provider.find_viral_moments(
+            timestamped,
+            duration=transcript.duration,
+            platform=platform,
+            target_length=target_length,
+            max_clips=max_clips,
+            language=transcript.language,
+            metadata=metadata,
+        )
+        try:
+            cache_file.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        except OSError:
+            _log.debug("could not cache viral analysis", exc_info=True)
+        self.events.publish(
+            EventName.ANALYSIS_READY,
+            kind="viral_moments",
+            count=len(result.segments),
+            platform=platform,
+        )
+        return result
 
     def find_hooks(
         self, transcript: Transcript, *, max_hooks: int = 10, cancel_token: CancelToken | None = None

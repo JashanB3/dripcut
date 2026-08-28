@@ -18,9 +18,10 @@ from dripcut.core.logging import get_logger, setup_logging
 from dripcut.core.paths import AppPaths, app_paths
 from dripcut.engines.ai.analysis import AnalysisEngine
 from dripcut.engines.ai.llm import OllamaClient
+from dripcut.engines.ai.provider import build_ai_provider
 from dripcut.engines.ai.transcription import TranscriptionEngine
 from dripcut.engines.ai.transcription_provider import GroqTranscriptionProvider
-from dripcut.engines.export.queue import JobQueue
+from dripcut.engines.export.queue import LocalJobQueue
 from dripcut.engines.ffmpeg.probe import MediaProbe
 from dripcut.engines.ffmpeg.runner import FFmpegRunner
 from dripcut.engines.split.registry import build_default_registry
@@ -112,12 +113,14 @@ def build_container(
         model=resolved_settings.ai.groq_transcription_model,
     )
     analysis = AnalysisEngine(llm, enabled=resolved_settings.ai.enable_ai)
+    ai_provider = build_ai_provider(llm)
     container.register_instance("llm", llm)
     container.register_instance("transcription_engine", transcription)
     container.register_instance("groq_transcription_provider", groq_transcription)
     container.register_instance("analysis_engine", analysis)
+    container.register_instance("ai_provider", ai_provider)
 
-    queue = JobQueue(
+    queue = LocalJobQueue(
         events,
         max_workers=resolved_settings.video.max_workers,
         history_file=resolved_paths.history_file,
@@ -134,10 +137,11 @@ def build_container(
         resolved_settings,
         resolved_paths,
         groq_transcription=groq_transcription,
+        content_provider=ai_provider,
     )
     media_service = MediaService(probe, video_engine, events, resolved_settings, resolved_paths)
     youtube_service = YouTubeService(resolved_paths)
-    social_service = SocialScheduleService(resolved_paths)
+    social_service = SocialScheduleService(resolved_paths, queue=queue)
     project_service = ProjectService(resolved_paths, events)
     split_service = SplitService(
         split_registry, video_engine, runner, events, resolved_settings, ai_service

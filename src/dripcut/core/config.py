@@ -79,7 +79,7 @@ class VideoSettings:
     preset: str = "medium"
     audio_bitrate: str = "192k"
     prefer_stream_copy: bool = True
-    max_workers: int = 2  # 8 GB M1: two FFmpeg processes is the sweet spot
+    max_workers: int = 2  # Hosted images override this to one worker.
     scene_threshold: float = 27.0
     silence_threshold_db: float = -32.0
     silence_min_duration: float = 0.6

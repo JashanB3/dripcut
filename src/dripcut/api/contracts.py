@@ -19,6 +19,57 @@ class ErrorResponse(BaseModel):
     error: ErrorDetail
 
 
+class AuthSignupRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class AuthLoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordRecoveryRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class PasswordResetRequest(BaseModel):
+    password: str = Field(min_length=8, max_length=256)
+    access_token: str | None = Field(default=None, max_length=8192)
+    refresh_token: str | None = Field(default=None, max_length=8192)
+
+
+class OAuthTokenRequest(BaseModel):
+    access_token: str = Field(min_length=20, max_length=8192)
+    refresh_token: str = Field(min_length=20, max_length=8192)
+
+
+class AuthUserResponse(BaseModel):
+    id: str
+    email: str
+    name: str
+    workspace_id: str | None = None
+    role: str | None = None
+    is_dripcut_admin: bool = False
+
+
+class AuthSessionResponse(BaseModel):
+    authenticated: bool
+    provider: str
+    user: AuthUserResponse | None = None
+    requires_email_confirmation: bool = False
+    message: str | None = None
+
+
+class PasswordRecoveryResponse(BaseModel):
+    message: str
+
+
+class OAuthAuthorizeResponse(BaseModel):
+    authorize_url: str
+
+
 class SourceAssetResponse(BaseModel):
     id: str
     kind: Literal["upload", "youtube"]
@@ -69,6 +120,7 @@ class RenderRequest(BaseModel):
     output_format: Literal["source", "landscape", "portrait", "square"] = "source"
     portrait_mode: Literal["ai_tracking", "center_crop", "blur_background"] = "center_crop"
     auto_captions: bool = False
+    caption_style: Literal["clean", "dynamic", "minimal", "bold"] = "clean"
     platforms: list[Literal["youtube", "instagram"]] = Field(default_factory=list, max_length=2)
     fast_mode: bool = True
 
@@ -100,6 +152,13 @@ class JobResponse(BaseModel):
     error: str | None = None
     error_code: str | None = None
     hint: str | None = None
+    created_at: float
+    started_at: float | None = None
+    finished_at: float | None = None
+    attempt: int = 0
+    max_attempts: int = 1
+    idempotent_replay: bool = False
+    idempotency_key: str | None = Field(default=None, exclude=True)
     artifacts: list[ArtifactResponse] = Field(default_factory=list)
     zip_artifact: ArtifactResponse | None = None
 
@@ -108,6 +167,85 @@ class HealthResponse(BaseModel):
     status: Literal["ok"]
     ffmpeg: bool
     ffprobe: bool
+
+
+class EncoderStatusResponse(BaseModel):
+    codec: str
+    encoder: str
+    provider: str
+    hardware: bool
+
+
+class PerformanceStageResponse(BaseModel):
+    name: str
+    count: int
+    p50_seconds: float
+    p95_seconds: float
+    max_seconds: float
+
+
+class OperationsMetricsResponse(BaseModel):
+    completed_jobs: int
+    failed_jobs: int
+    encoder: EncoderStatusResponse
+    stages: list[PerformanceStageResponse]
+
+
+class AdminUserResponse(BaseModel):
+    id: str
+    email: str
+    name: str
+    workspace_id: str = ""
+    role: str = "user"
+    created_at: str = ""
+    last_active_at: str = ""
+
+
+class AdminJobResponse(BaseModel):
+    id: str
+    title: str
+    status: str
+    stage: str = ""
+    project_id: str = ""
+    error_code: str = ""
+    error_message: str = ""
+    created_at: str = ""
+    elapsed_seconds: float = 0
+
+
+class AdminUsageResponse(BaseModel):
+    metric: str
+    quantity: float
+    unit: str
+
+
+class AdminOverviewResponse(BaseModel):
+    metrics: dict[str, float | int]
+    users: list[AdminUserResponse]
+    jobs: list[AdminJobResponse]
+    errors: list[AdminJobResponse]
+    usage: list[AdminUsageResponse]
+    generated_at: str
+
+
+class UsageMetricResponse(BaseModel):
+    key: str
+    label: str
+    used: float
+    reserved: float
+    limit: float | None
+    unit: str
+    percent: float
+    unlimited: bool = False
+
+
+class UsageSummaryResponse(BaseModel):
+    plan: str
+    plan_label: str
+    period_start: str
+    period_end: str
+    reset_at: str
+    metrics: list[UsageMetricResponse]
 
 
 class YouTubeDiagnosticsResponse(BaseModel):
@@ -155,9 +293,34 @@ class ProjectDetailResponse(ProjectResponse):
     source: SourceAssetResponse | None = None
 
 
+class ProjectUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=180)
+
+
 class ThumbnailRequest(BaseModel):
     prompt: str = Field(default="", max_length=500)
     target: Literal["youtube", "instagram"] = "youtube"
+
+
+class ThumbnailBriefResponse(BaseModel):
+    headline: str
+    visual_focus: str
+    emotion: str
+    composition: str
+    frame_guidance: str
+    avoid: list[str]
+
+
+class ThumbnailRankResponse(BaseModel):
+    artifact_id: str
+    score: int
+    reason: str
+
+
+class ThumbnailGenerationResponse(BaseModel):
+    candidates: list[ArtifactResponse]
+    brief: ThumbnailBriefResponse
+    ranking: list[ThumbnailRankResponse]
 
 
 class AIEditPlanRequest(BaseModel):
@@ -166,7 +329,7 @@ class AIEditPlanRequest(BaseModel):
 
 
 class AIEditActionResponse(BaseModel):
-    kind: Literal["trim", "format", "captions"]
+    kind: Literal["selection", "platform", "trim", "format", "captions", "style", "reframe"]
     label: str
     value: str | float | bool
 
@@ -178,6 +341,58 @@ class AIEditPlanResponse(BaseModel):
     segments: list[ClipSegmentRequest]
     output_format: Literal["source", "landscape", "portrait", "square"]
     auto_captions: bool
+    platform: Literal["youtube", "instagram"]
+    selection: Literal["standard", "viral"]
+    count: int
+    duration: float
+    caption_style: Literal["clean", "dynamic", "minimal", "bold"]
+    reframe: Literal["source", "center", "speaker", "blur_background"]
+
+
+class ViralMomentRequest(BaseModel):
+    platform: Literal["youtube", "instagram"]
+    target_length: float = Field(default=45, ge=5, le=180)
+    max_clips: int = Field(default=8, ge=1, le=20)
+
+
+class ViralMomentResponse(BaseModel):
+    id: str
+    start: float
+    end: float
+    duration: float
+    score: int
+    hook_score: int
+    retention_score: int
+    shareability_score: int
+    platform: Literal["youtube", "instagram"]
+    reason: str
+    hook: str
+
+
+class ViralMomentAnalysisResponse(BaseModel):
+    source_id: str
+    platform: Literal["youtube", "instagram"]
+    model: str
+    analysis_version: str
+    segments: list[ViralMomentResponse]
+
+
+class SocialMetadataRequest(BaseModel):
+    artifact_id: str | None = Field(default=None, max_length=64)
+
+
+class SocialMetadataResponse(BaseModel):
+    project_id: str
+    artifact_id: str | None = None
+    youtube_title: str
+    youtube_description: str
+    youtube_hashtags: list[str]
+    instagram_caption: str
+    instagram_hashtags: list[str]
+    instagram_cta: str
+    hook: str
+    category: str
+    posting_description: str
 
 
 class SocialConnectionResponse(BaseModel):
@@ -189,6 +404,16 @@ class SocialConnectionResponse(BaseModel):
     setup_hint: str
 
 
+class SocialOAuthStartResponse(BaseModel):
+    platform: Literal["instagram", "youtube"]
+    authorization_url: str
+
+
+class SocialDisconnectResponse(BaseModel):
+    platform: Literal["instagram", "youtube"]
+    disconnected: bool = True
+
+
 class ScheduleCreateRequest(BaseModel):
     project_id: str = Field(min_length=1, max_length=64)
     platforms: list[Literal["instagram", "youtube"]] = Field(min_length=1, max_length=2)
@@ -197,12 +422,20 @@ class ScheduleCreateRequest(BaseModel):
     caption: str = Field(default="{clip} #shorts #reels", max_length=2200)
 
 
+class SchedulePostUpdateRequest(BaseModel):
+    publish_at: str | None = Field(default=None, max_length=40)
+    caption: str | None = Field(default=None, max_length=2200)
+
+
 class ScheduledPostResponse(BaseModel):
+    id: str
     platform: Literal["instagram", "youtube"]
     clip_name: str
     publish_at: str
     caption: str
     status: str
+    external_post_id: str | None = None
+    error_message: str | None = None
 
 
 class ScheduleResponse(BaseModel):

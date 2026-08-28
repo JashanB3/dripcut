@@ -8,7 +8,7 @@ import pytest
 
 from dripcut.core.errors import ValidationError
 from dripcut.engines.export.presets import EXPORT_PRESETS, get_preset, preset_names
-from dripcut.engines.export.queue import JobQueue
+from dripcut.engines.export.queue import LocalJobQueue
 from dripcut.engines.video.encode import Quality
 from dripcut.models.job import Job, JobKind, JobResult, JobStatus
 from tests.conftest import needs_ffmpeg
@@ -37,10 +37,10 @@ def test_audio_preset_is_flagged() -> None:
     assert get_preset("Audio only (M4A)").audio_only is True
 
 
-def _queue(paths, **kwargs) -> JobQueue:
+def _queue(paths, **kwargs) -> LocalJobQueue:
     from dripcut.core.events import EventBus
 
-    return JobQueue(EventBus(), history_file=paths.history_file, **kwargs)
+    return LocalJobQueue(EventBus(), history_file=paths.history_file, **kwargs)
 
 
 def test_queue_runs_a_job(paths) -> None:
@@ -127,6 +127,69 @@ def test_history_persists_to_disk(paths) -> None:
     assert paths.history_file.exists()
 
 
+def test_queue_deduplicates_idempotent_submissions(paths) -> None:
+    queue = _queue(paths)
+    calls: list[str] = []
+    try:
+        first = Job(
+            kind=JobKind.TRIM,
+            title="first",
+            idempotency_key="workspace:request-123",
+            run=lambda _job: calls.append("ran") or JobResult(),
+        )
+        duplicate = Job(
+            kind=JobKind.TRIM,
+            title="duplicate",
+            idempotency_key="workspace:request-123",
+            run=lambda _job: calls.append("duplicate") or JobResult(),
+        )
+        assert queue.submit(first) is first
+        assert queue.submit(duplicate) is first
+        assert queue.wait(timeout=10)
+        assert calls == ["ran"]
+    finally:
+        queue.shutdown()
+
+
+def test_queue_retries_transient_work(paths) -> None:
+    queue = _queue(paths)
+    attempts: list[int] = []
+    try:
+        def flaky(_job: Job) -> JobResult:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise RuntimeError("temporary failure")
+            return JobResult(message="recovered")
+
+        job = queue.submit(
+            Job(kind=JobKind.TRIM, title="retry", run=flaky, max_attempts=2)
+        )
+        assert queue.wait(timeout=10)
+        assert job.status is JobStatus.SUCCEEDED
+        assert job.attempt == 2
+        assert job.result and job.result.message == "recovered"
+    finally:
+        queue.shutdown()
+
+
+def test_queue_recovers_interrupted_state_as_retryable_failure(paths) -> None:
+    from dripcut.core.events import EventBus
+    from dripcut.engines.export.queue import JsonJobStateStore, LocalJobQueue
+
+    interrupted = Job(kind=JobKind.SPLIT, title="interrupted")
+    JsonJobStateStore(paths.history_file).save([interrupted.to_dict()])
+
+    queue = LocalJobQueue(EventBus(), history_file=paths.history_file)
+    try:
+        recovered = queue.get(interrupted.id)
+        assert recovered is not None
+        assert recovered.status is JobStatus.FAILED
+        assert recovered.metadata["error_code"] == "WORKER_RESTARTED"
+        assert recovered.metadata["retryable"] is True
+    finally:
+        queue.shutdown()
+
+
 def test_worker_limit_is_respected(paths) -> None:
     queue = _queue(paths, max_workers=1)
     running: list[int] = []
@@ -170,7 +233,7 @@ def test_split_zip_archive_contains_every_clip(tmp_path) -> None:
     clips = []
     for index in range(2):
         clip = destination / f"clip-{index:03d}.mp4"
-        clip.write_bytes(f"clip {index}".encode("utf-8"))
+        clip.write_bytes(f"clip {index}".encode())
         clips.append(clip)
 
     archive = SplitService._zip_outputs(

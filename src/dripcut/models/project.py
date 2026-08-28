@@ -30,7 +30,7 @@ class Project:
 
     name: str
     source_path: Path | None = None
-    id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     duration: float = 0.0
@@ -41,7 +41,7 @@ class Project:
     outputs: list[Path] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     notes: str = ""
-    user_id: str = "local"
+    user_id: str = ""
     project_type: str = "auto_clip"
     source_asset_id: str | None = None
     status: str = "draft"
@@ -124,7 +124,7 @@ class Project:
         return cls(
             name=str(data.get("name", "Untitled")),
             source_path=Path(data["source_path"]) if data.get("source_path") else None,
-            id=str(data.get("id", uuid.uuid4().hex[:12])),
+            id=str(data.get("id", uuid.uuid4())),
             created_at=float(data.get("created_at", time.time())),
             updated_at=float(data.get("updated_at", time.time())),
             duration=float(data.get("duration", 0.0)),
@@ -135,7 +135,7 @@ class Project:
             outputs=[Path(p) for p in data.get("outputs", [])],
             tags=list(data.get("tags", [])),
             notes=str(data.get("notes", "")),
-            user_id=str(data.get("user_id", "local")),
+            user_id=str(data.get("user_id", "")),
             project_type=str(data.get("project_type", "auto_clip")),
             source_asset_id=str(data["source_asset_id"]) if data.get("source_asset_id") else None,
             status=str(data.get("status", "draft")),

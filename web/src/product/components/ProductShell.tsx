@@ -7,6 +7,7 @@ import {
   LayoutTemplate,
   Plus,
   Search,
+  ShieldCheck,
   Settings,
   Sparkles,
   UserRound,
@@ -15,10 +16,10 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { entitlementPreview } from "../config/entitlements";
 import type { ProductRoute } from "../models";
 
-export type UtilityPanel = "usage" | "settings" | "account" | null;
+export type UtilityPanel = "settings" | "account" | null;
+type ShellUser = { name: string; email: string; is_dripcut_admin?: boolean };
 
 const mainNavigation: Array<{ route: ProductRoute; label: string; icon: typeof Home }> = [
   { route: "home", label: "Home", icon: Home },
@@ -26,6 +27,7 @@ const mainNavigation: Array<{ route: ProductRoute; label: string; icon: typeof H
   { route: "templates", label: "Templates", icon: LayoutTemplate },
   { route: "ai-editor", label: "AI Editor", icon: Sparkles },
   { route: "schedule", label: "Schedule", icon: CalendarClock },
+  { route: "usage", label: "Usage", icon: WalletCards },
 ];
 
 export function ProductShell({
@@ -34,6 +36,8 @@ export function ProductShell({
   onCreate,
   utilityPanel,
   onUtilityPanel,
+  user,
+  onLogout,
   children,
 }: {
   route: ProductRoute;
@@ -41,8 +45,14 @@ export function ProductShell({
   onCreate: () => void;
   utilityPanel: UtilityPanel;
   onUtilityPanel: (panel: UtilityPanel) => void;
+  user: ShellUser;
+  onLogout: () => void;
   children: ReactNode;
 }) {
+  const initial = (user.name || user.email || "D").slice(0, 1).toUpperCase();
+  const navigation = user.is_dripcut_admin
+    ? [...mainNavigation, { route: "admin" as ProductRoute, label: "Admin", icon: ShieldCheck }]
+    : mainNavigation;
   return (
     <div className="product-shell">
       <aside className="product-nav">
@@ -55,7 +65,7 @@ export function ProductShell({
           <span>Create</span>
         </button>
         <nav className="product-nav__main" aria-label="Primary navigation">
-          {mainNavigation.map(({ route: itemRoute, label, icon: Icon }) => (
+          {navigation.map(({ route: itemRoute, label, icon: Icon }) => (
             <button
               key={itemRoute}
               data-selected={route === itemRoute}
@@ -67,14 +77,11 @@ export function ProductShell({
           ))}
         </nav>
         <div className="product-nav__bottom">
-          <button data-selected={utilityPanel === "usage"} onClick={() => onUtilityPanel("usage")}>
-            <WalletCards size={19} /><span>Usage</span>
-          </button>
           <button data-selected={route === "settings"} onClick={() => onNavigate("settings")}>
             <Settings size={19} /><span>Settings</span>
           </button>
           <button data-selected={utilityPanel === "account"} onClick={() => onUtilityPanel("account")}>
-            <span className="nav-avatar">J</span><span>Account</span>
+            <span className="nav-avatar">{initial}</span><span>Account</span>
           </button>
         </div>
       </aside>
@@ -89,31 +96,20 @@ export function ProductShell({
           <button className="topbar-help" title="Help center is not connected yet" disabled>
             <CircleHelp size={19} />
           </button>
-          <span className="local-pill">Local preview</span>
-          <button className="topbar-avatar" onClick={() => onUtilityPanel("account")} aria-label="Open account menu">J</button>
+          <span className="local-pill">{user.name}</span>
+          <button className="topbar-avatar" onClick={() => onUtilityPanel("account")} aria-label="Open account menu">{initial}</button>
         </header>
         <main className="route-outlet">{children}</main>
       </section>
       {utilityPanel && (
-        <UtilityDrawer panel={utilityPanel} onClose={() => onUtilityPanel(null)} />
+        <UtilityDrawer panel={utilityPanel} user={user} onLogout={onLogout} onClose={() => onUtilityPanel(null)} />
       )}
     </div>
   );
 }
 
-function UtilityDrawer({ panel, onClose }: { panel: Exclude<UtilityPanel, null>; onClose: () => void }) {
-  const usedMinutes = entitlementPreview.weeklySourceMinutesUsed;
-  const weeklyMinutes = entitlementPreview.weeklySourceMinutes;
-  const usedSeconds = Math.round(usedMinutes * 60);
-  const usedLabel = `${Math.floor(usedSeconds / 60)}:${String(usedSeconds % 60).padStart(2, "0")}`;
-  const limitLabel = `${weeklyMinutes}:00`;
-  const usagePercent = Math.min(100, (usedMinutes / weeklyMinutes) * 100);
+function UtilityDrawer({ panel, user, onLogout, onClose }: { panel: Exclude<UtilityPanel, null>; user: ShellUser; onLogout: () => void; onClose: () => void }) {
   const content = {
-    usage: {
-      eyebrow: "Usage preview",
-      title: "Your creator plan",
-      body: "Entitlements are not connected yet. This preview shows the intended weekly limit presentation.",
-    },
     settings: {
       eyebrow: "Settings",
       title: "Simple by default",
@@ -121,8 +117,8 @@ function UtilityDrawer({ panel, onClose }: { panel: Exclude<UtilityPanel, null>;
     },
     account: {
       eyebrow: "Account",
-      title: "Creator profile",
-      body: "Authentication and social OAuth are intentionally unavailable in this frontend foundation.",
+      title: user.name,
+      body: user.email,
     },
   }[panel];
 
@@ -133,17 +129,11 @@ function UtilityDrawer({ panel, onClose }: { panel: Exclude<UtilityPanel, null>;
         <span className="eyebrow">{content.eyebrow}</span>
         <h2>{content.title}</h2>
         <p>{content.body}</p>
-        {panel === "usage" && (
-          <div className="usage-preview">
-            <div><span>Example weekly usage</span><strong>{usedLabel} / {limitLabel} min</strong></div>
-            <span><i style={{ width: `${usagePercent}%` }} /></span>
-            <small>Limits will come from a configurable entitlement service.</small>
-          </div>
-        )}
         {panel === "account" && (
           <div className="connection-list">
             <div><Clapperboard size={18} /><span><strong>YouTube</strong><small>Not connected</small></span><button disabled>Connect</button></div>
             <div><Sparkles size={18} /><span><strong>Instagram</strong><small>Not connected</small></span><button disabled>Connect</button></div>
+            <button className="secondary-action account-logout" onClick={onLogout}>Log out</button>
           </div>
         )}
         {panel === "settings" && (
@@ -152,7 +142,7 @@ function UtilityDrawer({ panel, onClose }: { panel: Exclude<UtilityPanel, null>;
             <label><span>Default captions</span><input type="checkbox" disabled /></label>
           </div>
         )}
-        <div className="development-note"><UserRound size={16} /> Development state · no account data is stored</div>
+        <div className="development-note"><UserRound size={16} /> Signed in to your private workspace</div>
       </aside>
     </div>
   );

@@ -6,6 +6,7 @@ import type {
   OutputFormat,
   SourceAsset,
 } from "../models";
+import type { ClipTemplate } from "../templates/catalog";
 
 export type AutoClipPhase = "source" | "configure" | "render-preview" | "results";
 
@@ -25,10 +26,13 @@ export interface AutoClipState {
   currentTime: number;
   playing: boolean;
   renderStage: number;
+  templateId: string | null;
+  captionStyle: ClipTemplate["captionStyle"];
 }
 
 export type AutoClipAction =
-  | { type: "source-loaded"; source: SourceAsset; recommendations: AiRecommendation[] }
+  | { type: "source-loaded"; source: SourceAsset }
+  | { type: "apply-template"; template: ClipTemplate }
   | { type: "set-duration"; value: ClipDuration }
   | { type: "set-custom-duration"; value: number }
   | { type: "set-count"; value: number }
@@ -37,6 +41,8 @@ export type AutoClipAction =
   | { type: "set-output-format"; value: OutputFormat }
   | { type: "toggle-captions" }
   | { type: "toggle-ai" }
+  | { type: "set-ai-enabled"; value: boolean }
+  | { type: "set-recommendations"; recommendations: AiRecommendation[] }
   | { type: "accept-recommendation"; id: string }
   | { type: "ignore-recommendation"; id: string }
   | { type: "set-current-time"; value: number }
@@ -63,6 +69,8 @@ export const initialAutoClipState: AutoClipState = {
   currentTime: 0,
   playing: false,
   renderStage: 0,
+  templateId: null,
+  captionStyle: "clean",
 };
 
 export const selectedDuration = (state: AutoClipState): number =>
@@ -113,19 +121,37 @@ export function autoClipReducer(state: AutoClipState, action: AutoClipAction): A
   switch (action.type) {
     case "source-loaded":
       return {
-        ...initialAutoClipState,
+        ...state,
         phase: "configure",
         source: action.source,
-        recommendations: action.recommendations,
-        count: Math.min(5, Math.max(0, Math.floor(action.source.duration / 30))),
+        recommendations: [],
+        acceptedRecommendationIds: [],
+        ignoredRecommendationIds: [],
+        currentTime: 0,
+        playing: false,
+        renderStage: 0,
+        count: Math.min(5, Math.max(0, Math.floor(action.source.duration / selectedDuration(state)))),
+      };
+    case "apply-template":
+      return {
+        ...state,
+        templateId: action.template.id,
+        durationChoice: action.template.duration,
+        customDuration: action.template.duration,
+        outputFormat: action.template.aspectRatio,
+        autoCaptions: true,
+        platforms: [...action.template.platforms],
+        captionStyle: action.template.captionStyle,
       };
     case "set-duration": {
       const next = { ...state, durationChoice: action.value };
-      return { ...next, count: clampCount(next, next.count) };
+      const count = clampCount(next, next.count);
+      return { ...next, count: count || (maximumClipCount(next) > 0 ? 1 : 0) };
     }
     case "set-custom-duration": {
       const next = { ...state, customDuration: Math.max(5, Math.min(300, action.value)) };
-      return { ...next, count: clampCount(next, next.count) };
+      const count = clampCount(next, next.count);
+      return { ...next, count: count || (maximumClipCount(next) > 0 ? 1 : 0) };
     }
     case "set-count":
       return { ...state, count: clampCount(state, action.value) };
@@ -146,6 +172,20 @@ export function autoClipReducer(state: AutoClipState, action: AutoClipAction): A
       return {
         ...state,
         aiEnabled: !state.aiEnabled,
+        acceptedRecommendationIds: [],
+        ignoredRecommendationIds: [],
+      };
+    case "set-ai-enabled":
+      return {
+        ...state,
+        aiEnabled: action.value,
+        acceptedRecommendationIds: [],
+        ignoredRecommendationIds: [],
+      };
+    case "set-recommendations":
+      return {
+        ...state,
+        recommendations: action.recommendations,
         acceptedRecommendationIds: [],
         ignoredRecommendationIds: [],
       };

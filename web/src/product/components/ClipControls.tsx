@@ -17,7 +17,7 @@ const outputFormats: Array<[OutputFormat, string, string]> = [
   ["source", "Original", "Source"],
 ];
 
-export function ClipControls({ state, dispatch, onCreate, starting }: { state: AutoClipState; dispatch: (action: AutoClipAction) => void; onCreate: () => void; starting: boolean }) {
+export function ClipControls({ state, dispatch, onCreate, onToggleAI, starting, aiBusy }: { state: AutoClipState; dispatch: (action: AutoClipAction) => void; onCreate: () => void; onToggleAI: () => void; starting: boolean; aiBusy: boolean }) {
   const max = maximumClipCount(state);
   const segments = selectedSegments(state);
   const accepted = state.acceptedRecommendationIds.length;
@@ -78,8 +78,8 @@ export function ClipControls({ state, dispatch, onCreate, starting }: { state: A
         <span><strong>Auto captions</strong><small>Transcribe once, then burn phone-safe captions into each clip.</small></span>
       </label>
       <div className="ai-option" data-enabled={state.aiEnabled}>
-        <div><span><Sparkles size={17} /></span><p><strong>Find Viral Moments with AI</strong><small>Optional · off by default · demo recommendations</small></p></div>
-        <button role="switch" aria-checked={state.aiEnabled} aria-label="Find Viral Moments with AI" onClick={() => dispatch({ type: "toggle-ai" })}><i /></button>
+        <div><span><Sparkles size={17} /></span><p><strong>Find Viral Moments with AI</strong><small>{aiBusy ? "Analyzing the real transcript…" : "Optional · off by default · platform-aware"}</small></p></div>
+        <button role="switch" aria-checked={state.aiEnabled} aria-label="Find Viral Moments with AI" disabled={aiBusy} onClick={onToggleAI}><i /></button>
       </div>
       <div className="clip-plan-summary">
         <span>{state.aiEnabled && accepted ? "AI-selected" : "Sequential"}</span>

@@ -153,12 +153,3 @@ export const createDemoRecommendations = (duration: number): AiRecommendation[] 
     label,
   })).filter((item) => item.end > item.start);
 };
-
-export const templatePreviews = [
-  ["Podcast pulse", "Podcast", "45 sec", "violet"],
-  ["Big idea", "Education", "30 sec", "cyan"],
-  ["Launch energy", "Product", "15 sec", "coral"],
-  ["Daily momentum", "Motivation", "30 sec", "lime"],
-  ["Quick breakdown", "Business", "60 sec", "amber"],
-  ["Game winner", "Gaming", "30 sec", "violet"],
-] as const;

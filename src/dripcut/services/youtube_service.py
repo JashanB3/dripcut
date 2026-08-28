@@ -341,13 +341,19 @@ class YouTubeImportService:
         parsed = urlparse(value)
         host = (parsed.hostname or "").lower().rstrip(".")
         allowed = host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
-        if parsed.scheme not in {"http", "https"} or not allowed:
+        if (
+            parsed.scheme != "https"
+            or not allowed
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in {None, 443}
+        ):
             raise ValidationError(
                 "That is not a supported YouTube link.",
                 hint="Use a youtube.com or youtu.be video URL.",
             )
         video_id = YouTubeImportService.video_id(value)
-        if not video_id:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{3,64}", video_id):
             raise ValidationError(
                 "That YouTube link does not identify a video.",
                 hint="Paste a watch, Shorts, embed, or youtu.be video URL.",

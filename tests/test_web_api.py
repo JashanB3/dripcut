@@ -10,6 +10,17 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from dripcut.api.app import build_service, create_app
+from dripcut.engines.ai.provider import (
+    AIEditPlan as ProviderAIEditPlan,
+)
+from dripcut.engines.ai.provider import (
+    RankedClip,
+    RankedClips,
+    SocialMetadata,
+    ThumbnailBrief,
+    ViralMoment,
+    ViralMomentAnalysis,
+)
 from dripcut.models.transcript import Transcript, TranscriptSegment
 from dripcut.services.youtube_service import (
     YouTubeImportError,
@@ -31,7 +42,7 @@ def _wait_for_job(client: TestClient, job_id: str, timeout: float = 20) -> dict[
 
 
 def test_health_reports_media_dependencies(container) -> None:
-    app = create_app(build_service(container))
+    app = create_app(build_service(container), require_auth=False)
 
     with TestClient(app) as client:
         response = client.get("/api/health")
@@ -40,12 +51,75 @@ def test_health_reports_media_dependencies(container) -> None:
     assert response.json() == {"status": "ok", "ffmpeg": True, "ffprobe": True}
 
 
+def test_workspace_admin_can_read_aggregate_operations_metrics(container) -> None:
+    app = create_app(build_service(container), require_auth=False)
+
+    with TestClient(app) as client:
+        response = client.get("/api/operations/metrics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["completed_jobs"] == 0
+    assert payload["failed_jobs"] == 0
+    assert payload["encoder"]["codec"] == "h264"
+    assert payload["encoder"]["provider"] in {
+        "apple_videotoolbox",
+        "nvidia_nvenc",
+        "software",
+    }
+    assert payload["stages"] == []
+
+
+def test_internal_admin_overview_rejects_workspace_owner_and_returns_safe_metrics(
+    container, monkeypatch
+) -> None:
+    monkeypatch.setenv("DRIPCUT_ADMIN_EMAILS", "internal-admin@example.test")
+    app = create_app(build_service(container), require_auth=True)
+
+    with TestClient(app) as client:
+        ordinary = client.post(
+            "/api/auth/signup",
+            json={
+                "name": "Workspace Owner",
+                "email": "owner@example.test",
+                "password": "correct-horse",
+            },
+        )
+        assert ordinary.status_code == 201
+        assert ordinary.json()["user"]["role"] == "owner"
+        assert ordinary.json()["user"]["is_dripcut_admin"] is False
+        assert client.get("/api/admin/overview").status_code == 403
+
+        assert client.post("/api/auth/logout").status_code == 204
+        admin = client.post(
+            "/api/auth/signup",
+            json={
+                "name": "Internal Admin",
+                "email": "internal-admin@example.test",
+                "password": "correct-horse",
+            },
+        )
+        assert admin.status_code == 201
+        assert admin.json()["user"]["is_dripcut_admin"] is True
+        overview = client.get("/api/admin/overview")
+
+    assert overview.status_code == 200, overview.text
+    payload = overview.json()
+    assert payload["metrics"]["total_users"] == 2
+    assert payload["metrics"]["render_jobs"] == 0
+    assert {user["email"] for user in payload["users"]} == {
+        "owner@example.test",
+        "internal-admin@example.test",
+    }
+    assert payload["errors"] == []
+
+
 def test_production_allowed_origins_env(container, monkeypatch) -> None:
     monkeypatch.setenv(
         "DRIPCUT_ALLOWED_ORIGINS",
         "https://dripcut.example, https://studio.dripcut.example ",
     )
-    app = create_app(build_service(container))
+    app = create_app(build_service(container), require_auth=False)
 
     with TestClient(app) as client:
         response = client.options(
@@ -62,8 +136,55 @@ def test_production_allowed_origins_env(container, monkeypatch) -> None:
     )
 
 
+def test_auth_rate_limit_returns_normalized_json(container, monkeypatch) -> None:
+    monkeypatch.setenv("DRIPCUT_RATE_LIMIT_AUTH", "2")
+    app = create_app(build_service(container), require_auth=True)
+
+    with TestClient(app) as client:
+        for _ in range(2):
+            response = client.post(
+                "/api/auth/login",
+                json={"email": "missing@example.test", "password": "wrong-password"},
+            )
+            assert response.status_code == 401
+        limited = client.post(
+            "/api/auth/login",
+            json={"email": "missing@example.test", "password": "wrong-password"},
+        )
+
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"]
+    assert limited.json()["error"]["code"] == "RATE_LIMITED"
+
+
+def test_production_cookie_mutation_requires_allowed_origin(container, monkeypatch) -> None:
+    monkeypatch.setenv("DRIPCUT_CSRF_PROTECTION", "1")
+    monkeypatch.setenv("DRIPCUT_ALLOWED_ORIGINS", "https://studio.dripcut.example")
+    app = create_app(build_service(container), require_auth=True)
+
+    with TestClient(app) as client:
+        signup = client.post(
+            "/api/auth/signup",
+            json={
+                "name": "CSRF Test",
+                "email": "csrf@example.test",
+                "password": "correct-horse",
+            },
+        )
+        assert signup.status_code == 201
+        rejected = client.post("/api/auth/logout")
+        accepted = client.post(
+            "/api/auth/logout",
+            headers={"Origin": "https://studio.dripcut.example"},
+        )
+
+    assert rejected.status_code == 403
+    assert rejected.json()["error"]["code"] == "CSRF_ORIGIN_REJECTED"
+    assert accepted.status_code == 204
+
+
 def test_upload_plan_render_stream_and_download(container, sample_video: Path) -> None:
-    app = create_app(build_service(container))
+    app = create_app(build_service(container), require_auth=False)
     with TestClient(app) as client:
         with sample_video.open("rb") as source:
             upload = client.post(
@@ -123,7 +244,7 @@ def test_upload_plan_render_stream_and_download(container, sample_video: Path) -
 
 
 def test_standard_plan_drops_incomplete_tail(container, sample_video: Path) -> None:
-    app = create_app(build_service(container))
+    app = create_app(build_service(container), require_auth=False)
     with TestClient(app) as client, sample_video.open("rb") as source:
         asset = client.post(
             "/api/sources/upload",
@@ -135,6 +256,30 @@ def test_standard_plan_drops_incomplete_tail(container, sample_video: Path) -> N
         ).json()
         assert plan["max_count"] == 2
         assert plan["segments"][-1]["end"] == 5
+
+
+def test_render_idempotency_key_replays_the_original_job(
+    container, sample_video: Path
+) -> None:
+    app = create_app(build_service(container), require_auth=False)
+    with TestClient(app) as client, sample_video.open("rb") as source:
+        asset = client.post(
+            "/api/sources/upload",
+            files={"video": ("idempotent.mp4", source, "video/mp4")},
+        ).json()
+        request = {
+            "source_id": asset["id"],
+            "segments": [{"id": "clip-1", "index": 1, "start": 0, "end": 1}],
+        }
+        headers = {"Idempotency-Key": "render-button-click-1"}
+        first = client.post("/api/jobs/clips", json=request, headers=headers)
+        replay = client.post("/api/jobs/clips", json=request, headers=headers)
+
+        assert first.status_code == 202, first.text
+        assert replay.status_code == 202, replay.text
+        assert replay.json()["id"] == first.json()["id"]
+        assert replay.json()["idempotent_replay"] is True
+        assert _wait_for_job(client, first.json()["id"])["status"] == "succeeded"
 
 
 def test_portrait_caption_render_updates_project(
@@ -165,8 +310,37 @@ def test_portrait_caption_render_updates_project(
     container.ai.groq_transcription = RemoteProvider()
     container.settings.ai.transcription_provider = "groq"
     monkeypatch.setattr(container.ai, "transcribe", lambda *_args, **_kwargs: transcript)
+
+    class ThumbnailProvider:
+        name = "test-thumbnail"
+        model = "test-thumbnail-model"
+
+        def rank_clips(self, clips, *, platform):
+            del platform
+            return RankedClips(
+                clips=[
+                    RankedClip(
+                        id=str(item["id"]),
+                        score=max(70, 100 - index),
+                        reason="Clear frame with useful composition.",
+                    )
+                    for index, item in enumerate(clips)
+                ]
+            )
+
+        def generate_thumbnail_brief(self, _transcript, *, prompt=""):
+            return ThumbnailBrief(
+                headline="A clear surprising moment",
+                visual_focus=prompt or "The main subject",
+                emotion="Curious",
+                composition="Center the subject and reserve space for a short headline.",
+                frame_guidance="Use the sharpest expressive frame.",
+                avoid=["Tiny text", "Clutter"],
+            )
+
+    container.ai.content_provider = ThumbnailProvider()
     service = build_service(container)
-    app = create_app(service)
+    app = create_app(service, require_auth=False)
     with TestClient(app) as client, sample_video.open("rb") as source:
         asset = client.post(
             "/api/sources/upload",
@@ -212,9 +386,12 @@ def test_portrait_caption_render_updates_project(
             json={"prompt": "Clear subject", "target": "youtube"},
         )
         assert thumbnails.status_code == 201, thumbnails.text
-        candidates = thumbnails.json()
+        generated = thumbnails.json()
+        candidates = generated["candidates"]
         assert len(candidates) == 4
         assert all(item["kind"] == "thumbnail" for item in candidates)
+        assert generated["brief"]["headline"] == "A clear surprising moment"
+        assert len(generated["ranking"]) == 4
         image = client.get(candidates[0]["stream_url"])
         assert image.status_code == 200
         assert image.headers["content-type"].startswith("image/")
@@ -237,7 +414,24 @@ def test_portrait_caption_render_updates_project(
 
 
 def test_ai_edit_plan_is_reviewable_and_bounded(container, sample_video: Path) -> None:
-    app = create_app(build_service(container))
+    class PlanningProvider:
+        name = "test-provider"
+        model = "test-planner"
+
+        def plan_edit(self, *_args, **_kwargs):
+            return ProviderAIEditPlan(
+                platform="instagram",
+                selection="standard",
+                count=1,
+                duration=5,
+                aspect_ratio="9:16",
+                captions=True,
+                caption_style="dynamic",
+                reframe="speaker",
+            )
+
+    container.ai.content_provider = PlanningProvider()
+    app = create_app(build_service(container), require_auth=False)
     with TestClient(app) as client, sample_video.open("rb") as source:
         asset = client.post(
             "/api/sources/upload",
@@ -257,14 +451,113 @@ def test_ai_edit_plan_is_reviewable_and_bounded(container, sample_video: Path) -
     assert plan["auto_captions"] is True
     assert plan["segments"][0]["end"] == 5
     assert {item["kind"] for item in plan["actions"]} == {
-        "trim",
-        "format",
-        "captions",
+        "platform", "selection", "trim", "format", "captions", "style", "reframe"
     }
+    assert plan["platform"] == "instagram"
+    assert plan["selection"] == "standard"
+
+
+def test_social_metadata_is_generated_as_one_editable_package(
+    container, sample_video: Path, monkeypatch
+) -> None:
+    class SocialProvider:
+        name = "test-provider"
+        model = "test-social"
+
+        def generate_social_metadata(self, _transcript):
+            return SocialMetadata(
+                youtube_title="The surprising lesson",
+                youtube_description="A complete short description.",
+                youtube_hashtags=["#shorts", "#learn"],
+                instagram_caption="Nobody expected this result.",
+                instagram_hashtags=["#reels", "#creator"],
+                instagram_cta="Save this for later.",
+                hook="This changed everything",
+                category="Education",
+                posting_description="Publish when your audience is active.",
+            )
+
+    transcript = Transcript(
+        source=sample_video,
+        language="en",
+        duration=6,
+        segments=[TranscriptSegment(index=0, start=0, end=5, text="This changed everything.")],
+    )
+    container.ai.content_provider = SocialProvider()
+    monkeypatch.setattr(container.ai, "transcribe", lambda *_args, **_kwargs: transcript)
+    app = create_app(build_service(container), require_auth=False)
+    with TestClient(app) as client, sample_video.open("rb") as source:
+        asset = client.post(
+            "/api/sources/upload",
+            files={"video": ("social.mp4", source, "video/mp4")},
+        ).json()
+        response = client.post(
+            f"/api/projects/{asset['project_id']}/social-metadata",
+            json={},
+        )
+
+    assert response.status_code == 200, response.text
+    package = response.json()
+    assert package["youtube_title"] == "The surprising lesson"
+    assert package["instagram_cta"] == "Save this for later."
+
+
+def test_real_viral_analysis_endpoint_returns_provider_scores(
+    container, sample_video: Path, monkeypatch
+) -> None:
+    class ViralProvider:
+        name = "test-provider"
+        model = "test-viral-model"
+        analysis_version = "viral-test-v1"
+
+        def health(self):
+            return {"configured": True}
+
+        def find_viral_moments(self, *_args, **_kwargs):
+            return ViralMomentAnalysis(
+                segments=[
+                    ViralMoment(
+                        start=0,
+                        end=5,
+                        score=93,
+                        hook_score=96,
+                        retention_score=91,
+                        shareability_score=89,
+                        platform="instagram",
+                        reason="Strong opening and complete payoff",
+                        hook="This changed everything",
+                    )
+                ]
+            )
+
+    transcript = Transcript(
+        source=sample_video,
+        language="en",
+        duration=6,
+        segments=[TranscriptSegment(index=0, start=0, end=5, text="This changed everything.")],
+    )
+    container.ai.content_provider = ViralProvider()
+    monkeypatch.setattr(container.ai, "transcribe", lambda *_args, **_kwargs: transcript)
+    app = create_app(build_service(container), require_auth=False)
+    with TestClient(app) as client, sample_video.open("rb") as source:
+        asset = client.post(
+            "/api/sources/upload",
+            files={"video": ("viral.mp4", source, "video/mp4")},
+        ).json()
+        response = client.post(
+            f"/api/sources/{asset['id']}/viral-moments",
+            json={"platform": "instagram", "target_length": 30, "max_clips": 5},
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["model"] == "test-viral-model"
+    assert payload["segments"][0]["score"] == 93
+    assert payload["segments"][0]["hook"] == "This changed everything"
 
 
 def test_invalid_youtube_url_returns_a_useful_error(container) -> None:
-    app = create_app(build_service(container))
+    app = create_app(build_service(container), require_auth=False)
     with TestClient(app) as client:
         response = client.post("/api/sources/youtube", json={"url": "https://example.com/video"})
     assert response.status_code == 400
@@ -276,7 +569,7 @@ def test_invalid_youtube_url_returns_a_useful_error(container) -> None:
 
 
 def test_youtube_diagnostics_are_safe_for_operator_visibility(container) -> None:
-    app = create_app(build_service(container))
+    app = create_app(build_service(container), require_auth=False)
     with TestClient(app) as client:
         response = client.get("/api/youtube/diagnostics")
 
@@ -316,7 +609,7 @@ def test_youtube_import_job_registers_a_verified_source(
         )
 
     monkeypatch.setattr(container.youtube, "import_video", import_video)
-    app = create_app(build_service(container))
+    app = create_app(build_service(container), require_auth=False)
     with TestClient(app) as client:
         queued = client.post(
             "/api/jobs/youtube",
@@ -345,7 +638,7 @@ def test_youtube_import_job_preserves_normalized_error_code(container, monkeypat
         )
 
     monkeypatch.setattr(container.youtube, "import_video", blocked)
-    app = create_app(build_service(container))
+    app = create_app(build_service(container), require_auth=False)
     with TestClient(app) as client:
         queued = client.post(
             "/api/jobs/youtube",
@@ -358,7 +651,7 @@ def test_youtube_import_job_preserves_normalized_error_code(container, monkeypat
 
 
 def test_youtube_import_requires_content_rights_confirmation(container) -> None:
-    app = create_app(build_service(container))
+    app = create_app(build_service(container), require_auth=False)
     with TestClient(app) as client:
         response = client.post(
             "/api/jobs/youtube",
@@ -370,7 +663,7 @@ def test_youtube_import_requires_content_rights_confirmation(container) -> None:
 
 
 def test_validation_errors_use_the_stable_json_contract(container) -> None:
-    app = create_app(build_service(container))
+    app = create_app(build_service(container), require_auth=False)
     with TestClient(app) as client:
         response = client.post("/api/jobs/clips", json={})
 
@@ -389,7 +682,7 @@ def test_unexpected_errors_return_safe_json(container, monkeypatch) -> None:
         raise RuntimeError("private implementation detail")
 
     monkeypatch.setattr(service, "list_projects", fail)
-    app = create_app(service)
+    app = create_app(service, require_auth=False)
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get("/api/projects")
 
