@@ -15,6 +15,17 @@ htmlcov/
 .env
 .env.*
 !.env.example
+.envrc
+.direnv/
+.secrets/
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*credentials*.json
+*service-account*.json
 /workspace/
 /out/
 web/node_modules/

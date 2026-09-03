@@ -50,7 +50,9 @@ multi-user SaaS path described below.
 - Docker for container verification/deployment
 
 Optional providers are configured entirely on the backend. No server secret may use a
-`VITE_` prefix.
+`VITE_` prefix. See [`docs/credential-security.md`](docs/credential-security.md) for the rotation
+runbook and [`docs/deployment-environment.md`](docs/deployment-environment.md) for the production
+frontend/backend boundary.
 
 ## Local Setup
 
@@ -216,7 +218,7 @@ Backend:
 source .venv/bin/activate
 ruff check src tests scripts
 pytest
-python scripts/check_secrets.py
+python scripts/check_secrets.py --history
 ```
 
 Frontend:
@@ -228,6 +230,13 @@ npm run typecheck
 npm test
 npm run build
 npm run test:e2e
+```
+
+After the frontend build, verify that no ignored backend value reached browser assets:
+
+```bash
+cd ..
+python scripts/check_secrets.py --bundle web/dist --env-file .env
 ```
 
 The Playwright flow creates an account, uploads real generated media, renders a standard clip,
