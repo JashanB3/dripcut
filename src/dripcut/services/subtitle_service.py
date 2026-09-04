@@ -322,7 +322,11 @@ def _stream_captioned_video(
         )
     except OSError as exc:  # pragma: no cover - host dependent
         capture.release()
-        raise FFmpegError("FFmpeg could not be started.", command=command, hint=str(exc)) from exc
+        raise FFmpegError(
+            "FFmpeg could not be started.",
+            command=command,
+            hint="Check that FFmpeg is installed and available, then try again.",
+        ) from exc
 
     stderr_thread = threading.Thread(
         target=_drain_binary_stderr, args=(process.stderr, stderr_buffer), daemon=True

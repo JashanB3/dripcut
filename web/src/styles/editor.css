@@ -420,6 +420,10 @@
 .check-link-button { align-self: flex-start; background: var(--dc-surface-dark); border-radius: 8px; color: white; cursor: pointer; font-size: 10px; font-weight: 750; margin-top: auto; padding: 10px 14px; }
 .source-trust { align-items: center; color: var(--dc-text-3); display: flex; font-size: 10px; gap: 7px; justify-content: center; margin-top: 20px; }
 .source-error-banner { align-items: center; background: var(--dc-coral-soft); border: 1px solid #f2cbd0; border-radius: 9px; color: var(--dc-danger); display: flex; gap: 8px; margin: 0 auto 12px; max-width: 980px; padding: 10px 12px; }
+.customer-error > span { display: flex; flex: 1; flex-direction: column; gap: 2px; }
+.customer-error strong { font-size: var(--dc-text-sm); }
+.customer-error small { color: #8f4250; font-size: var(--dc-text-xs); line-height: 1.4; }
+.customer-error button { align-items: center; background: white; border: 1px solid #efc0c8; border-radius: var(--dc-radius-md); color: var(--dc-danger); cursor: pointer; display: inline-flex; font-size: var(--dc-text-xs); font-weight: 800; gap: 5px; min-height: 34px; padding: 0 10px; }
 .workflow-back { align-items: center; background: transparent; color: var(--dc-text-2); cursor: pointer; display: flex; font-size: 10px; gap: 5px; margin-bottom: 10px; padding: 0; }
 .configure-layout { align-items: start; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 330px; }
 .source-workspace { min-width: 0; }

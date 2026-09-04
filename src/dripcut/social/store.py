@@ -358,12 +358,14 @@ class SupabaseSocialStore:
             "PATCH",
             f"/rest/v1/scheduled_posts?id=eq.{post.id}",
             {
+                "publish_at": _as_utc(post.publish_at).isoformat(),
                 "status": post.status,
                 "external_post_id": post.external_post_id,
                 "error_message": post.error_message,
                 "metadata": {
                     "schedule_id": post.schedule_id,
                     "archive": post.archive,
+                    "archive_name": Path(post.archive).name,
                     "clip_name": post.clip_name,
                     "caption": post.caption,
                     "title": post.title,

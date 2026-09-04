@@ -14,6 +14,7 @@ from dripcut.core.errors import SocialProviderError
 from dripcut.social.models import (
     OAuthResult,
     PlatformName,
+    ProviderCapabilities,
     PublishResult,
     SocialCredentials,
 )
@@ -25,6 +26,8 @@ class SocialProvider(Protocol):
 
     @property
     def configured(self) -> bool: ...
+
+    def capabilities(self) -> ProviderCapabilities: ...
 
     def authorization_url(self, *, state: str, redirect_uri: str) -> str: ...
 
@@ -58,6 +61,14 @@ def _provider_error(provider: str, response: httpx.Response) -> SocialProviderEr
     )
 
 
+def _youtube_scopes_from_environment() -> tuple[str, ...]:
+    configured = os.environ.get("DRIPCUT_YOUTUBE_SCOPES", "").strip()
+    if not configured:
+        return YouTubeProvider.default_scopes
+    scopes = tuple(scope.strip() for scope in configured.replace(",", " ").split() if scope.strip())
+    return scopes or YouTubeProvider.default_scopes
+
+
 class YouTubeProvider:
     """Google OAuth and YouTube Data API resumable uploads."""
 
@@ -67,9 +78,8 @@ class YouTubeProvider:
     token_endpoint = "https://oauth2.googleapis.com/token"
     api_root = "https://www.googleapis.com/youtube/v3"
     upload_endpoint = "https://www.googleapis.com/upload/youtube/v3/videos"
-    scopes = (
+    default_scopes = (
         "https://www.googleapis.com/auth/youtube.upload",
-        "https://www.googleapis.com/auth/youtube.readonly",
     )
 
     def __init__(
@@ -77,10 +87,12 @@ class YouTubeProvider:
         client_id: str = "",
         client_secret: str = "",
         *,
+        scopes: tuple[str, ...] | None = None,
         client: httpx.Client | None = None,
     ) -> None:
         self.client_id = client_id.strip()
         self.client_secret = client_secret.strip()
+        self.scopes = scopes or self.default_scopes
         self.client = client or httpx.Client(timeout=60, follow_redirects=True)
 
     @classmethod
@@ -88,11 +100,28 @@ class YouTubeProvider:
         return cls(
             os.environ.get("DRIPCUT_YOUTUBE_CLIENT_ID", ""),
             os.environ.get("DRIPCUT_YOUTUBE_CLIENT_SECRET", ""),
+            scopes=_youtube_scopes_from_environment(),
         )
 
     @property
     def configured(self) -> bool:
         return bool(self.client_id and self.client_secret)
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            platform=self.platform,
+            can_upload_video=True,
+            can_publish_short=True,
+            can_schedule=True,
+            can_publish_thumbnail=False,
+            can_edit_metadata=False,
+            can_fetch_analytics=False,
+            supported_aspect_ratios=("9:16", "1:1", "16:9"),
+            max_video_duration_seconds=_optional_positive_int(
+                "DRIPCUT_YOUTUBE_MAX_VIDEO_DURATION_SECONDS"
+            ),
+            supported_content_types=("video_clip",),
+        )
 
     def authorization_url(self, *, state: str, redirect_uri: str) -> str:
         self._require_configured()
@@ -279,6 +308,22 @@ class InstagramProvider:
     def configured(self) -> bool:
         return bool(self.app_id and self.app_secret)
 
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            platform=self.platform,
+            can_upload_video=True,
+            can_publish_short=True,
+            can_schedule=True,
+            can_publish_thumbnail=False,
+            can_edit_metadata=False,
+            can_fetch_analytics=False,
+            supported_aspect_ratios=("9:16", "1:1"),
+            max_video_duration_seconds=_optional_positive_int(
+                "DRIPCUT_INSTAGRAM_MAX_VIDEO_DURATION_SECONDS"
+            ),
+            supported_content_types=("video_clip",),
+        )
+
     @property
     def graph_root(self) -> str:
         return f"https://graph.facebook.com/{self.graph_version}"
@@ -428,3 +473,14 @@ class InstagramProvider:
                 "Instagram OAuth is not configured.",
                 hint="Set DRIPCUT_META_APP_ID and DRIPCUT_META_APP_SECRET.",
             )
+
+
+def _optional_positive_int(name: str) -> int | None:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None

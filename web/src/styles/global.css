@@ -74,6 +74,25 @@ button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity:
   height: 100%;
   justify-content: center;
 }
+.app-crash {
+  align-items: center;
+  background:
+    radial-gradient(circle at 15% 10%, rgb(111 53 242 / 12%), transparent 34%),
+    radial-gradient(circle at 85% 18%, rgb(11 183 201 / 12%), transparent 32%),
+    var(--dc-canvas);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  justify-content: center;
+  padding: 32px;
+  text-align: center;
+}
+.app-crash > span { color: var(--dc-accent); font-size: var(--dc-text-sm); font-weight: 850; letter-spacing: 0.12em; text-transform: uppercase; }
+.app-crash h1 { font-size: var(--dc-text-3xl); margin: 0; }
+.app-crash p { color: var(--dc-text-2); margin: 0; max-width: 480px; }
+.app-crash small { color: var(--dc-text-3); font-family: var(--dc-font-mono); }
+.app-crash button { background: var(--dc-accent); border-radius: var(--dc-radius-md); color: white; cursor: pointer; font-weight: 800; margin-top: 8px; min-height: 44px; padding: 0 20px; }
 .auth-screen {
   background:
     radial-gradient(circle at 10% 0%, rgb(111 53 242 / 12%), transparent 32%),

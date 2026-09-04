@@ -30,8 +30,20 @@ class AuthResult:
 class AuthProviderError(Exception):
     """A normalized authentication failure safe to surface to the API layer."""
 
-    def __init__(self, message: str, *, status_code: int = 400, code: str = "AUTH_ERROR") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 400,
+        code: str = "AUTH_ERROR",
+        retryable: bool | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.code = code
+        self.retryable = (
+            status_code == 429 or status_code >= 500
+            if retryable is None
+            else retryable
+        )

@@ -18,6 +18,15 @@ from dripcut.engines.ai.llm import OllamaClient
 from dripcut.utils.text import extract_json
 
 Platform = Literal["youtube", "instagram"]
+ScriptRewriteAction = Literal[
+    "rewrite_hook",
+    "shorten",
+    "expand",
+    "conversational",
+    "educational",
+    "engaging",
+    "rewrite_cta",
+]
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 _SYSTEM = (
@@ -106,6 +115,45 @@ class ThumbnailBrief(StrictModel):
     avoid: list[str] = Field(default_factory=list, max_length=12)
 
 
+class ScriptBrief(StrictModel):
+    topic: str = Field(min_length=2, max_length=500)
+    platform: Platform
+    audience: str = Field(min_length=1, max_length=240)
+    tone: str = Field(min_length=1, max_length=100)
+    language: str = Field(min_length=2, max_length=40)
+    target_duration_seconds: int = Field(ge=10, le=600)
+    content_goal: str = Field(min_length=1, max_length=300)
+    cta: str = Field(default="", max_length=300)
+    reference_text: str = Field(default="", max_length=20_000)
+
+
+class ScriptSection(StrictModel):
+    type: Literal["body", "point", "example", "payoff"] = "body"
+    text: str = Field(min_length=1, max_length=20_000)
+
+
+class ScriptDraft(StrictModel):
+    title: str = Field(min_length=1, max_length=180)
+    hook: str = Field(min_length=1, max_length=500)
+    sections: list[ScriptSection] = Field(min_length=1, max_length=16)
+    cta: str = Field(default="", max_length=500)
+    estimated_duration_seconds: int = Field(ge=5, le=900)
+    platform: Platform
+    language: str = Field(min_length=2, max_length=40)
+    description: str = Field(default="", max_length=5000)
+    caption: str = Field(default="", max_length=2200)
+    hashtags: list[str] = Field(default_factory=list, max_length=30)
+
+    @property
+    def script(self) -> str:
+        parts = [self.hook, *(section.text for section in self.sections), self.cta]
+        return "\n\n".join(part.strip() for part in parts if part.strip())
+
+
+class AlternateHooks(StrictModel):
+    hooks: list[str] = Field(min_length=2, max_length=8)
+
+
 class AIProvider(ABC):
     """Strict editorial AI boundary. Providers never execute media commands."""
 
@@ -139,6 +187,30 @@ class AIProvider(ABC):
 
     @abstractmethod
     def generate_thumbnail_brief(self, transcript: str, *, prompt: str = "") -> ThumbnailBrief: ...
+
+    @abstractmethod
+    def generate_script(self, brief: ScriptBrief) -> ScriptDraft: ...
+
+    @abstractmethod
+    def rewrite_script(
+        self,
+        script: str,
+        *,
+        action: ScriptRewriteAction,
+        brief: ScriptBrief,
+    ) -> ScriptDraft: ...
+
+    @abstractmethod
+    def generate_hooks(self, script: str, *, brief: ScriptBrief) -> AlternateHooks: ...
+
+    @abstractmethod
+    def adapt_script_for_platform(
+        self,
+        script: str,
+        *,
+        platform: Platform,
+        brief: ScriptBrief,
+    ) -> ScriptDraft: ...
 
     @abstractmethod
     def health(self) -> dict[str, object]: ...
@@ -235,6 +307,68 @@ class StructuredAIProvider(AIProvider):
             max_tokens=900,
         )
 
+    def generate_script(self, brief: ScriptBrief) -> ScriptDraft:
+        return self._generate(
+            "Create an original, editable short-form video script from this brief. "
+            "The hook must work immediately, sections must form a complete thought, and the "
+            "CTA must match the creator's goal. Keep the spoken length close to the target. "
+            f"Brief: {json.dumps(brief.model_dump())}",
+            ScriptDraft,
+            max_tokens=2400,
+        )
+
+    def rewrite_script(
+        self,
+        script: str,
+        *,
+        action: ScriptRewriteAction,
+        brief: ScriptBrief,
+    ) -> ScriptDraft:
+        directions = {
+            "rewrite_hook": "Replace the opening hook while preserving the core message.",
+            "shorten": "Make the script materially shorter without losing its payoff.",
+            "expand": "Add useful detail and examples without filler.",
+            "conversational": "Make the language natural, direct, and conversational.",
+            "educational": "Make the structure clearer and more educational.",
+            "engaging": "Increase curiosity, momentum, and retention without clickbait.",
+            "rewrite_cta": "Rewrite the CTA so it feels specific and natural.",
+        }
+        return self._generate(
+            f"{directions[action]} Return the complete revised script document. "
+            f"Brief: {json.dumps(brief.model_dump())}\n\nCurrent script:\n{_bounded(script)}",
+            ScriptDraft,
+            max_tokens=2400,
+        )
+
+    def generate_hooks(self, script: str, *, brief: ScriptBrief) -> AlternateHooks:
+        return self._generate(
+            "Create distinct alternate opening hooks for this script. Each hook must be concise, "
+            "credible, and suited to the selected platform and audience. "
+            f"Brief: {json.dumps(brief.model_dump())}\n\nScript:\n{_bounded(script)}",
+            AlternateHooks,
+            max_tokens=700,
+        )
+
+    def adapt_script_for_platform(
+        self,
+        script: str,
+        *,
+        platform: Platform,
+        brief: ScriptBrief,
+    ) -> ScriptDraft:
+        platform_direction = (
+            "Adapt for YouTube Shorts with a searchable, complete idea and strong retention."
+            if platform == "youtube"
+            else "Adapt for Instagram Reels with an immediate social hook and shareable payoff."
+        )
+        payload = brief.model_copy(update={"platform": platform})
+        return self._generate(
+            f"{platform_direction} Return the complete revised script document. "
+            f"Brief: {json.dumps(payload.model_dump())}\n\nCurrent script:\n{_bounded(script)}",
+            ScriptDraft,
+            max_tokens=2400,
+        )
+
 
 class NvidiaAIProvider(StructuredAIProvider):
     """NVIDIA NIM's OpenAI-compatible chat endpoint with no browser-side secret."""
@@ -276,6 +410,8 @@ class NvidiaAIProvider(StructuredAIProvider):
             "top_p": 0.9,
             "max_tokens": max_tokens,
             "stream": False,
+            "response_format": {"type": "json_object"},
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         request = urllib.request.Request(
             f"{self.endpoint}/chat/completions",
@@ -363,10 +499,16 @@ def build_ai_provider(client: OllamaClient) -> AIProvider:
         return NvidiaAIProvider(
             api_key=nvidia_key,
             model=os.environ.get(
-                "DRIPCUT_AI_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"
+                "DRIPCUT_NVIDIA_MODEL",
+                os.environ.get(
+                    "DRIPCUT_AI_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"
+                ),
             ),
             endpoint=os.environ.get(
-                "DRIPCUT_AI_ENDPOINT", "https://integrate.api.nvidia.com/v1"
+                "DRIPCUT_NVIDIA_BASE_URL",
+                os.environ.get(
+                    "DRIPCUT_AI_ENDPOINT", "https://integrate.api.nvidia.com/v1"
+                ),
             ),
         )
     if configured not in {"auto", "ollama", "local"}:

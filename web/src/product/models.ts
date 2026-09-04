@@ -5,12 +5,18 @@ export type ProductRoute =
   | "ai-editor"
   | "auto-clip"
   | "ai-thumbnail"
+  | "script"
   | "schedule"
   | "usage"
   | "admin"
   | "settings";
 export type SourceKind = "upload" | "youtube";
 export type Platform = "youtube" | "instagram";
+export type ContentSourceType = "video_upload" | "youtube_url" | "script" | "ai_script" | "ai_prompt";
+export type ContentType = "video_clip" | "script" | "ai_script" | "ai_video";
+export type ContentStatus = "draft" | "generating" | "review" | "ready" | "scheduled" | "partially_published" | "published" | "failed" | "archived";
+export type TargetPlatform = Platform | "facebook" | "tiktok" | "bilibili" | "linkedin";
+export type PlatformTargetStatus = "draft" | "ready" | "scheduled" | "queued" | "uploading" | "processing" | "published" | "failed" | "cancelled";
 export type ClipDuration = 15 | 30 | 45 | 60 | "custom";
 export type OutputFormat = "source" | "landscape" | "portrait" | "square";
 
@@ -63,6 +69,7 @@ export interface ApiJob {
   error?: string;
   errorCode?: string;
   hint?: string;
+  retryable: boolean;
   artifacts: ApiArtifact[];
   zipArtifact?: ApiArtifact;
 }
@@ -121,6 +128,113 @@ export interface ApiProject {
   source?: SourceAsset;
 }
 
+export interface ContentSource {
+  id: string;
+  workspaceId: string;
+  ownerId: string;
+  projectId: string;
+  sourceType: ContentSourceType;
+  title: string;
+  textContent?: string;
+  sourceAssetId?: string;
+  externalUrl?: string;
+  metadata: Record<string, unknown>;
+  status: "draft" | "importing" | "ready" | "failed";
+  rightsConfirmed: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContentItem {
+  id: string;
+  workspaceId: string;
+  ownerId: string;
+  projectId: string;
+  sourceId?: string;
+  contentType: ContentType;
+  title: string;
+  script?: string;
+  hook?: string;
+  body?: string;
+  description?: string;
+  caption?: string;
+  hashtags: string[];
+  thumbnailArtifactId?: string;
+  videoArtifactId?: string;
+  audioArtifactId?: string;
+  durationSeconds?: number;
+  aspectRatio?: string;
+  language?: string;
+  status: ContentStatus;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScriptBrief {
+  topic: string;
+  platform: Platform;
+  audience: string;
+  tone: string;
+  language: string;
+  targetDurationSeconds: number;
+  contentGoal: string;
+  cta: string;
+  referenceText: string;
+}
+
+export type ScriptAction =
+  | "rewrite_hook"
+  | "generate_hooks"
+  | "shorten"
+  | "expand"
+  | "conversational"
+  | "educational"
+  | "engaging"
+  | "rewrite_cta"
+  | "adapt_youtube"
+  | "adapt_instagram";
+
+export interface ScriptWorkspace {
+  source: ContentSource;
+  item: ContentItem;
+  alternateHooks: string[];
+}
+
+export interface PlatformTarget {
+  id: string;
+  workspaceId: string;
+  ownerId: string;
+  contentItemId: string;
+  platform: TargetPlatform;
+  socialConnectionId?: string;
+  scheduledAt?: string;
+  sourceTimezone?: string;
+  publishStatus: PlatformTargetStatus;
+  providerPostId?: string;
+  providerMetadata: Record<string, unknown>;
+  idempotencyKey?: string;
+  attemptCount: number;
+  lastErrorCode?: string;
+  lastErrorMessage?: string;
+  publishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderCapabilities {
+  platform: Platform;
+  canUploadVideo: boolean;
+  canPublishShort: boolean;
+  canSchedule: boolean;
+  canPublishThumbnail: boolean;
+  canEditMetadata: boolean;
+  canFetchAnalytics: boolean;
+  supportedAspectRatios: string[];
+  maxVideoDurationSeconds?: number;
+  supportedContentTypes: ContentType[];
+}
+
 export interface WorkflowDefinition {
   id: string;
   title: string;
@@ -130,19 +244,13 @@ export interface WorkflowDefinition {
   status: "available" | "development";
   accent: "violet" | "cyan" | "coral" | "lime" | "amber";
   badge?: string;
+  scriptPlatform?: Platform;
 }
 
 export interface RenderStage {
   id: string;
   label: string;
   detail: string;
-}
-
-export interface ScheduleDraft {
-  platforms: Platform[];
-  startDate: string;
-  frequency: "6h" | "12h" | "1d" | "2d" | "custom";
-  bestTime: boolean;
 }
 
 export interface AIEditPlan {

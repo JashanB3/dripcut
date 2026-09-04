@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createClipJob, fetchAdminOverview, fetchUsage, parseApiResponse, requestJson } from "./client";
+import {
+  createClipJob,
+  fetchAdminOverview,
+  fetchProjectContent,
+  fetchProjectContentSources,
+  fetchProviderCapabilities,
+  fetchUsage,
+  parseApiResponse,
+  requestJson,
+} from "./client";
 
 const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -26,6 +35,21 @@ describe("parseApiResponse", () => {
   it("normalizes a 400 JSON error", async () => {
     await expect(parseApiResponse(jsonResponse({ error: { code: "BAD_INPUT", message: "Try another value." } }, 400)))
       .rejects.toMatchObject({ status: 400, code: "BAD_INPUT", message: "Try another value." });
+  });
+
+  it("preserves retry guidance and the request reference", async () => {
+    await expect(parseApiResponse(jsonResponse({ error: {
+      code: "AUTH_PROVIDER_UNAVAILABLE",
+      message: "We could not sign you in right now.",
+      hint: "Try again in a moment.",
+      request_id: "request-123",
+      retryable: true,
+    } }, 503))).rejects.toMatchObject({
+      code: "AUTH_PROVIDER_UNAVAILABLE",
+      requestId: "request-123",
+      retryable: true,
+      hint: "Try again in a moment. · Request ID: request-123",
+    });
   });
 
   it("normalizes a 500 JSON error", async () => {
@@ -155,5 +179,84 @@ describe("fetchAdminOverview", () => {
     expect(overview.metrics.total_users).toBe(3);
     expect(overview.users[0].workspaceId).toBe("workspace-1");
     expect(overview.jobs[0].errorCode).toBe("RENDER_FAILED");
+  });
+});
+
+describe("universal content mappings", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("loads provider-neutral source and content records", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse([{
+        id: "source-1",
+        workspace_id: "workspace-1",
+        owner_id: "user-1",
+        project_id: "project-1",
+        source_type: "ai_prompt",
+        title: "Launch idea",
+        text_content: "Create a launch short",
+        metadata: { language: "en" },
+        status: "draft",
+        rights_confirmed: false,
+        created_at: "2026-09-01T00:00:00Z",
+        updated_at: "2026-09-01T00:00:00Z",
+      }]))
+      .mockResolvedValueOnce(jsonResponse([{
+        id: "content-1",
+        workspace_id: "workspace-1",
+        owner_id: "user-1",
+        project_id: "project-1",
+        source_id: "source-1",
+        content_type: "ai_script",
+        title: "Launch short",
+        hashtags: ["launch"],
+        status: "review",
+        metadata: {},
+        created_at: "2026-09-01T00:00:00Z",
+        updated_at: "2026-09-01T00:00:00Z",
+      }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sources = await fetchProjectContentSources("project-1");
+    const content = await fetchProjectContent("project-1");
+
+    expect(sources[0]).toMatchObject({
+      workspaceId: "workspace-1",
+      sourceType: "ai_prompt",
+      textContent: "Create a launch short",
+    });
+    expect(content[0]).toMatchObject({
+      sourceId: "source-1",
+      contentType: "ai_script",
+      status: "review",
+    });
+  });
+
+  it("maps provider capabilities without hard-coded page assumptions", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([{
+      platform: "youtube",
+      can_upload_video: true,
+      can_publish_short: true,
+      can_schedule: true,
+      can_publish_thumbnail: false,
+      can_edit_metadata: false,
+      can_fetch_analytics: false,
+      supported_aspect_ratios: ["9:16", "16:9"],
+      max_video_duration_seconds: null,
+      supported_content_types: ["video_clip"],
+    }])));
+
+    await expect(fetchProviderCapabilities()).resolves.toEqual([{
+      platform: "youtube",
+      canUploadVideo: true,
+      canPublishShort: true,
+      canSchedule: true,
+      canPublishThumbnail: false,
+      canEditMetadata: false,
+      canFetchAnalytics: false,
+      supportedAspectRatios: ["9:16", "16:9"],
+      maxVideoDurationSeconds: undefined,
+      supportedContentTypes: ["video_clip"],
+    }]);
   });
 });

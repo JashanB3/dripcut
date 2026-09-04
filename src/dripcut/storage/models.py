@@ -25,6 +25,4 @@ class UploadRejected(DripCutError):
         status_code: int = 400,
         hint: str | None = None,
     ) -> None:
-        super().__init__(message, hint=hint)
-        self.code = code
-        self.status_code = status_code
+        super().__init__(message, hint=hint, code=code, status_code=status_code)

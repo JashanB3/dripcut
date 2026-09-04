@@ -67,6 +67,26 @@ def test_queue_records_failures_without_raising(paths) -> None:
         assert job.status is JobStatus.FAILED
         assert "nope" in (job.error or "")
         assert job.hint
+        assert job.metadata["error_code"] == "VALIDATION_ERROR"
+        assert job.metadata["retryable"] is False
+    finally:
+        queue.shutdown()
+
+
+def test_queue_hides_unexpected_worker_details(paths) -> None:
+    queue = _queue(paths)
+    try:
+        def explode(_job: Job) -> JobResult:
+            raise RuntimeError("/private/path provider-secret-detail")
+
+        job = queue.submit(Job(kind=JobKind.TRIM, title="unexpected", run=explode))
+        assert queue.wait(timeout=10)
+        assert job.status is JobStatus.FAILED
+        assert job.error == "Something went wrong while rendering."
+        assert "private/path" not in (job.hint or "")
+        assert "provider-secret-detail" not in (job.hint or "")
+        assert job.metadata["error_code"] == "UNEXPECTED_WORKER_ERROR"
+        assert job.metadata["retryable"] is True
     finally:
         queue.shutdown()
 
@@ -168,6 +188,10 @@ def test_queue_retries_transient_work(paths) -> None:
         assert job.status is JobStatus.SUCCEEDED
         assert job.attempt == 2
         assert job.result and job.result.message == "recovered"
+        assert job.error is None
+        assert job.hint is None
+        assert "error_code" not in job.metadata
+        assert "retryable" not in job.metadata
     finally:
         queue.shutdown()
 

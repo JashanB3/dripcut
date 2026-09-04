@@ -1,7 +1,8 @@
 import { AlertTriangle, Bot, Clock3, Database, Film, FolderKanban, RefreshCw, Send, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { ApiError, fetchAdminOverview } from "../api/client";
+import { fetchAdminOverview } from "../api/client";
+import { CustomerError } from "../components/CustomerError";
 import type { AdminOverview } from "../models";
 
 const metricCards = [
@@ -18,15 +19,15 @@ const metricCards = [
 export function AdminPage() {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [busy, setBusy] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     setBusy(true);
-    setError("");
+    setError(null);
     void fetchAdminOverview()
       .then(setOverview)
-      .catch((reason: ApiError) => setError(reason.message || "Admin analytics are unavailable."))
+      .catch(setError)
       .finally(() => setBusy(false));
   }, [refreshKey]);
 
@@ -36,7 +37,7 @@ export function AdminPage() {
         <div><span className="eyebrow">Internal operations</span><h1>DripCut Admin</h1><p>Privacy-safe product health across users, processing, AI and publishing.</p></div>
         <button className="secondary-action" disabled={busy} onClick={() => setRefreshKey((value) => value + 1)}><RefreshCw size={16} /> {busy ? "Refreshing…" : "Refresh"}</button>
       </header>
-      {error && <div className="inline-error"><AlertTriangle size={17} /> {error}</div>}
+      {error !== null && <CustomerError error={error} fallback="Admin analytics are unavailable." onRetry={() => setRefreshKey((value) => value + 1)} />}
       {busy && !overview && <div className="admin-loading"><span className="spinner" /> Loading operations…</div>}
       {overview && <>
         <section className="admin-metric-grid">

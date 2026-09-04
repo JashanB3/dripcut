@@ -1,10 +1,10 @@
 import {
   CircleHelp,
   CalendarClock,
-  Clapperboard,
   Home,
   FolderKanban,
   LayoutTemplate,
+  FilePenLine,
   Plus,
   Search,
   ShieldCheck,
@@ -25,6 +25,7 @@ const mainNavigation: Array<{ route: ProductRoute; label: string; icon: typeof H
   { route: "home", label: "Home", icon: Home },
   { route: "projects", label: "Projects", icon: FolderKanban },
   { route: "templates", label: "Templates", icon: LayoutTemplate },
+  { route: "script", label: "Script Studio", icon: FilePenLine },
   { route: "ai-editor", label: "AI Editor", icon: Sparkles },
   { route: "schedule", label: "Schedule", icon: CalendarClock },
   { route: "usage", label: "Usage", icon: WalletCards },
@@ -102,13 +103,31 @@ export function ProductShell({
         <main className="route-outlet">{children}</main>
       </section>
       {utilityPanel && (
-        <UtilityDrawer panel={utilityPanel} user={user} onLogout={onLogout} onClose={() => onUtilityPanel(null)} />
+        <UtilityDrawer
+          panel={utilityPanel}
+          user={user}
+          onLogout={onLogout}
+          onOpenConnections={() => { onUtilityPanel(null); onNavigate("schedule"); }}
+          onClose={() => onUtilityPanel(null)}
+        />
       )}
     </div>
   );
 }
 
-function UtilityDrawer({ panel, user, onLogout, onClose }: { panel: Exclude<UtilityPanel, null>; user: ShellUser; onLogout: () => void; onClose: () => void }) {
+function UtilityDrawer({
+  panel,
+  user,
+  onLogout,
+  onOpenConnections,
+  onClose,
+}: {
+  panel: Exclude<UtilityPanel, null>;
+  user: ShellUser;
+  onLogout: () => void;
+  onOpenConnections: () => void;
+  onClose: () => void;
+}) {
   const content = {
     settings: {
       eyebrow: "Settings",
@@ -131,8 +150,7 @@ function UtilityDrawer({ panel, user, onLogout, onClose }: { panel: Exclude<Util
         <p>{content.body}</p>
         {panel === "account" && (
           <div className="connection-list">
-            <div><Clapperboard size={18} /><span><strong>YouTube</strong><small>Not connected</small></span><button disabled>Connect</button></div>
-            <div><Sparkles size={18} /><span><strong>Instagram</strong><small>Not connected</small></span><button disabled>Connect</button></div>
+            <div><CalendarClock size={18} /><span><strong>Publishing accounts</strong><small>View live YouTube and Instagram connection status.</small></span><button onClick={onOpenConnections}>Manage</button></div>
             <button className="secondary-action account-logout" onClick={onLogout}>Log out</button>
           </div>
         )}

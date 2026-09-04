@@ -3,6 +3,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { createAIEditPlan, createClipJob, uploadSource } from "../api/client";
 import { ClipResults } from "../components/ClipResults";
+import { CustomerError } from "../components/CustomerError";
 import { RenderProgress } from "../components/RenderProgress";
 import type { AIEditPlan, ApiJob, SourceAsset } from "../models";
 
@@ -13,17 +14,17 @@ export function AIEditorPage() {
   const [plan, setPlan] = useState<AIEditPlan | null>(null);
   const [job, setJob] = useState<ApiJob | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
 
   const load = async (file: File) => {
     setBusy(true);
-    setError("");
+    setError(null);
     try {
       setSource(await uploadSource(file));
       setPlan(null);
       setJob(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The source could not be uploaded.");
+      setError(reason);
     } finally {
       setBusy(false);
     }
@@ -32,11 +33,11 @@ export function AIEditorPage() {
   const createPlan = async () => {
     if (!source || !prompt.trim()) return;
     setBusy(true);
-    setError("");
+    setError(null);
     try {
       setPlan(await createAIEditPlan(source.id, prompt));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The edit plan could not be created.");
+      setError(reason);
     } finally {
       setBusy(false);
     }
@@ -45,7 +46,7 @@ export function AIEditorPage() {
   const applyPlan = async () => {
     if (!plan) return;
     setBusy(true);
-    setError("");
+    setError(null);
     try {
       setJob(await createClipJob(plan.sourceId, plan.segments, {
         outputFormat: plan.outputFormat,
@@ -53,7 +54,7 @@ export function AIEditorPage() {
         platforms: [plan.platform],
       }));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The edit could not start.");
+      setError(reason);
     } finally {
       setBusy(false);
     }
@@ -75,7 +76,7 @@ export function AIEditorPage() {
         <h1>Describe the edit. Review every action.</h1>
         <p>DripCut translates a constrained prompt into a real render plan. Nothing runs until you approve it.</p>
       </header>
-      {error && <div className="source-error-banner">{error}</div>}
+      {error !== null && <CustomerError error={error} fallback="The AI edit could not be completed." />}
       <div className="ai-editor-layout">
         <section className="ai-chat-preview">
           <div className="ai-chat-preview__header"><Sparkles size={18} /><strong>AI Editor</strong><span>Review first</span></div>

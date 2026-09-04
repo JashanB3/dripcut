@@ -224,6 +224,28 @@ def test_upload_plan_render_stream_and_download(container, sample_video: Path) -
         assert all(item["size_bytes"] > 1000 for item in clips)
         assert all(item["duration"] == 2 for item in clips)
 
+        content_sources = client.get(
+            f"/api/projects/{asset['project_id']}/sources/content"
+        )
+        assert content_sources.status_code == 200
+        assert content_sources.json()[0]["id"] == asset["id"]
+        assert content_sources.json()[0]["source_type"] == "video_upload"
+
+        content_items = client.get(f"/api/projects/{asset['project_id']}/content")
+        assert content_items.status_code == 200
+        mapped = content_items.json()
+        assert {item["video_artifact_id"] for item in mapped} == {
+            clip["id"] for clip in clips
+        }
+        assert all(item["content_type"] == "video_clip" for item in mapped)
+
+        capabilities = client.get("/api/social/capabilities")
+        assert capabilities.status_code == 200
+        assert {item["platform"] for item in capabilities.json()} == {
+            "youtube",
+            "instagram",
+        }
+
         stream = client.get(clips[0]["stream_url"], headers={"Range": "bytes=0-1023"})
         assert stream.status_code == 206
         assert stream.headers["content-range"].startswith("bytes 0-")
@@ -241,6 +263,118 @@ def test_upload_plan_render_stream_and_download(container, sample_video: Path) -
             assert len(names) == 3
             assert all(name.startswith("sample-clips/") for name in names)
             assert all(item.compress_type == zipfile.ZIP_STORED for item in handle.infolist())
+
+
+def test_universal_content_api_crud_and_mass_assignment_protection(
+    container, sample_video: Path
+) -> None:
+    app = create_app(build_service(container), require_auth=False)
+    with TestClient(app) as client, sample_video.open("rb") as video:
+        asset = client.post(
+            "/api/sources/upload",
+            files={"video": ("content-api.mp4", video, "video/mp4")},
+        ).json()
+        project_id = asset["project_id"]
+        source = client.post(
+            f"/api/projects/{project_id}/sources/content",
+            json={
+                "source_type": "script",
+                "title": "Launch script",
+                "text_content": "A short hook and a clear payoff.",
+                "metadata": {"language": "en"},
+            },
+        )
+        assert source.status_code == 201, source.text
+
+        created = client.post(
+            f"/api/projects/{project_id}/content",
+            json={
+                "source_id": source.json()["id"],
+                "content_type": "script",
+                "title": "Launch short",
+                "script": "A short hook and a clear payoff.",
+                "hashtags": ["#launch", "creator"],
+            },
+        )
+        assert created.status_code == 201, created.text
+        content_id = created.json()["id"]
+
+        updated = client.patch(
+            f"/api/content/{content_id}",
+            json={"title": "Launch short v2", "status": "ready"},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["title"] == "Launch short v2"
+        assert updated.json()["status"] == "ready"
+
+        target = client.post(
+            f"/api/content/{content_id}/targets",
+            json={
+                "platform": "linkedin",
+                "scheduled_at": "2026-09-02T10:00:00+00:00",
+            },
+        )
+        assert target.status_code == 201, target.text
+        target_id = target.json()["id"]
+        target = client.patch(
+            f"/api/content/{content_id}/targets/{target_id}",
+            json={"publish_status": "scheduled"},
+        )
+        assert target.status_code == 200, target.text
+        assert target.json()["publish_status"] == "scheduled"
+        assert len(client.get(f"/api/content/{content_id}/targets").json()) == 1
+
+        protected = client.patch(
+            f"/api/content/{content_id}",
+            json={"workspace_id": "another-workspace"},
+        )
+        assert protected.status_code == 422
+        assert protected.json()["error"]["code"] == "VALIDATION_ERROR"
+
+        assert client.delete(
+            f"/api/content/{content_id}/targets/{target_id}"
+        ).status_code == 204
+        assert client.delete(f"/api/content/{content_id}").status_code == 204
+        assert client.get(f"/api/content/{content_id}").status_code == 404
+
+
+def test_content_api_hides_other_workspaces_resources(container, sample_video: Path) -> None:
+    app = create_app(build_service(container), require_auth=True)
+    with TestClient(app) as client, sample_video.open("rb") as video:
+        alice = client.post(
+            "/api/auth/signup",
+            json={
+                "name": "Alice",
+                "email": "alice-content@example.test",
+                "password": "correct-horse",
+            },
+        )
+        assert alice.status_code == 201
+        asset = client.post(
+            "/api/sources/upload",
+            files={"video": ("alice.mp4", video, "video/mp4")},
+        ).json()
+        content = client.post(
+            f"/api/projects/{asset['project_id']}/content",
+            json={"content_type": "script", "title": "Alice private draft"},
+        )
+        assert content.status_code == 201, content.text
+        content_id = content.json()["id"]
+
+        assert client.post("/api/auth/logout").status_code == 204
+        bob = client.post(
+            "/api/auth/signup",
+            json={
+                "name": "Bob",
+                "email": "bob-content@example.test",
+                "password": "correct-horse",
+            },
+        )
+        assert bob.status_code == 201
+
+        hidden = client.get(f"/api/content/{content_id}")
+        assert hidden.status_code == 404
+        assert hidden.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
 def test_standard_plan_drops_incomplete_tail(container, sample_video: Path) -> None:
@@ -564,7 +698,8 @@ def test_invalid_youtube_url_returns_a_useful_error(container) -> None:
     error = response.json()["error"]
     assert error["message"] == "That is not a supported YouTube link."
     assert error["hint"] == "Use a youtube.com or youtu.be video URL."
-    assert error["code"] == "VALIDATIONERROR"
+    assert error["code"] == "VALIDATION_ERROR"
+    assert error["retryable"] is False
     assert error["request_id"] == response.headers["x-request-id"]
 
 
@@ -671,6 +806,8 @@ def test_validation_errors_use_the_stable_json_contract(container) -> None:
     assert response.headers["content-type"].startswith("application/json")
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
     assert response.json()["error"]["details"]
+    assert all("input" not in item for item in response.json()["error"]["details"])
+    assert response.json()["error"]["retryable"] is False
     assert response.json()["error"]["request_id"] == response.headers["x-request-id"]
 
 
@@ -689,5 +826,6 @@ def test_unexpected_errors_return_safe_json(container, monkeypatch) -> None:
     assert response.status_code == 500
     assert response.headers["content-type"].startswith("application/json")
     assert response.json()["error"]["code"] == "INTERNAL_SERVER_ERROR"
+    assert response.json()["error"]["retryable"] is True
     assert "private implementation detail" not in response.text
     assert response.json()["error"]["request_id"] == response.headers["x-request-id"]

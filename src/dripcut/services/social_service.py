@@ -25,6 +25,7 @@ from dripcut.models.job import Job, JobKind, JobResult
 from dripcut.social.crypto import CredentialCipher
 from dripcut.social.models import (
     PlatformName,
+    ProviderCapabilities,
     ScheduledPost,
     SocialAccount,
     SocialCredentials,
@@ -224,6 +225,9 @@ class SocialScheduleService:
     ) -> dict[PlatformName, SocialConnection]:
         return {item.platform: item for item in self.connections(principal)}
 
+    def capabilities(self) -> list[ProviderCapabilities]:
+        return [provider.capabilities() for provider in self.providers.values()]
+
     def create_schedule(
         self,
         *,
@@ -371,6 +375,8 @@ class SocialScheduleService:
             return 0
         token = principal.access_token if principal else ""
         due = self.store.due_posts(datetime.now(UTC))
+        if principal is not None:
+            due = [post for post in due if post.workspace_id == principal.workspace_id]
         for post in due:
             self._enqueue(post, access_token=token)
         return len(due)

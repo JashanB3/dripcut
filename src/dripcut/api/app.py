@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
@@ -26,23 +26,36 @@ from dripcut.api.contracts import (
     AuthSessionResponse,
     AuthSignupRequest,
     AuthUserResponse,
+    ContentItemCreateRequest,
+    ContentItemResponse,
+    ContentItemUpdateRequest,
+    ContentSourceCreateRequest,
+    ContentSourceResponse,
     ErrorDetail,
     ErrorResponse,
     HealthResponse,
     JobResponse,
+    ManualScriptCreateRequest,
     OAuthAuthorizeResponse,
     OAuthTokenRequest,
     OperationsMetricsResponse,
     PasswordRecoveryRequest,
     PasswordRecoveryResponse,
     PasswordResetRequest,
+    PlatformTargetCreateRequest,
+    PlatformTargetResponse,
+    PlatformTargetUpdateRequest,
     ProjectDetailResponse,
     ProjectResponse,
     ProjectUpdateRequest,
+    ProviderCapabilitiesResponse,
     RenderRequest,
     ScheduleCreateRequest,
     SchedulePostUpdateRequest,
     ScheduleResponse,
+    ScriptActionRequest,
+    ScriptGenerateRequest,
+    ScriptWorkspaceResponse,
     SocialConnectionResponse,
     SocialDisconnectResponse,
     SocialMetadataRequest,
@@ -63,11 +76,23 @@ from dripcut.api.service import WebClipService
 from dripcut.api.stores import LocalArtifactStore, LocalSourceAssetStore, QueueJobStore
 from dripcut.auth.models import AuthProviderError, AuthResult
 from dripcut.auth.provider import AuthProvider, build_auth_provider
+from dripcut.content.models import (
+    ContentItemStatus,
+    ContentSourceStatus,
+    ContentSourceType,
+    ContentType,
+    PlatformTargetStatus,
+    TargetPlatform,
+)
+from dripcut.content.repository import build_content_repository
+from dripcut.content.service import ContentService
 from dripcut.core.bootstrap import build_container
 from dripcut.core.container import ServiceContainer
 from dripcut.core.errors import DripCutError
+from dripcut.engines.ai.provider import ScriptBrief, ScriptRewriteAction
 from dripcut.observability.metrics import summarize_pipeline_jobs
 from dripcut.security.rate_limit import InMemoryRateLimiter
+from dripcut.services.script_service import ScriptStudioService, ScriptWorkspace
 from dripcut.social.store import build_social_store
 from dripcut.storage.models import UploadRejected
 from dripcut.storage.provider import build_storage_provider
@@ -117,7 +142,14 @@ def _rate_limit_for(request: Request) -> tuple[str, int] | None:
     }:
         return "auth", int(os.environ.get("DRIPCUT_RATE_LIMIT_AUTH", "30"))
     expensive = (
-        path in {"/api/jobs/clips", "/api/jobs/youtube", "/api/sources/youtube", "/api/ai/edit-plan"}
+        path in {
+            "/api/jobs/clips",
+            "/api/jobs/youtube",
+            "/api/sources/youtube",
+            "/api/ai/edit-plan",
+            "/api/scripts/generate",
+        }
+        or path.startswith("/api/scripts/")
         or path.endswith("/viral-moments")
         or path.endswith("/thumbnails")
         or path.endswith("/social-metadata")
@@ -162,6 +194,7 @@ def _error_content(
     request: Request,
     hint: str | None = None,
     details: object | list[object] | None = None,
+    retryable: bool = False,
 ) -> dict[str, object]:
     return ErrorResponse(
         error=ErrorDetail(
@@ -170,6 +203,7 @@ def _error_content(
             hint=hint,
             details=details,
             request_id=getattr(request.state, "request_id", None),
+            retryable=retryable,
         )
     ).model_dump(exclude_none=True)
 
@@ -260,6 +294,23 @@ def create_app(
     )
     social = clip_service.container.social
     social.store = build_social_store(web_root, tenants.name)
+    content_repository = build_content_repository(web_root, tenants.name)
+
+    def source_project_id(source_id: str) -> str | None:
+        return clip_service.get_source(source_id).project_id
+
+    def artifact_project_id(artifact_id: str) -> str | None:
+        artifact = clip_service.get_artifact(artifact_id)
+        return clip_service.job_response(artifact.job_id).project_id or None
+
+    content = ContentService(
+        content_repository,
+        tenants,
+        social_store=social.store,
+        source_project_id=source_project_id,
+        artifact_project_id=artifact_project_id,
+    )
+    script_studio = ScriptStudioService(content, clip_service.container.ai.content_provider)
     auth_is_required = _auth_required() if require_auth is None else require_auth
     allowed_origins = {origin.rstrip("/") for origin in _allowed_origins()}
     rate_limiter = InMemoryRateLimiter(
@@ -291,6 +342,7 @@ def create_app(
     app.state.tenant_repository = tenants
     app.state.usage_service = usage
     app.state.admin_repository = admin_repository
+    app.state.content_service = content
     app.add_middleware(
         CORSMiddleware,
         allow_origins=sorted(allowed_origins),
@@ -332,6 +384,7 @@ def create_app(
                         request=request,
                         code="RATE_LIMITED",
                         message="Too many requests. Please wait a moment and try again.",
+                        retryable=True,
                     ),
                 )
         response = await call_next(request)
@@ -351,13 +404,14 @@ def create_app(
     @app.exception_handler(DripCutError)
     async def dripcut_error(request: Request, error: DripCutError) -> JSONResponse:
         return JSONResponse(
-            status_code=400,
+            status_code=error.status_code,
             headers=_request_headers(request),
             content=_error_content(
                 request=request,
                 message=error.message,
                 hint=error.hint,
-                code=getattr(error, "code", error.__class__.__name__.upper()),
+                code=error.code,
+                retryable=error.retryable,
             ),
         )
 
@@ -377,6 +431,7 @@ def create_app(
                     "requested": error.requested,
                     "limit": error.limit,
                 },
+                retryable=False,
             ),
         )
 
@@ -390,6 +445,7 @@ def create_app(
                 code=error.code,
                 message=error.message,
                 hint=error.hint,
+                retryable=error.retryable,
             ),
         )
 
@@ -398,7 +454,12 @@ def create_app(
         return JSONResponse(
             status_code=error.status_code,
             headers=_request_headers(request),
-            content=_error_content(request=request, code=error.code, message=error.message),
+            content=_error_content(
+                request=request,
+                code=error.code,
+                message=error.message,
+                retryable=error.retryable,
+            ),
         )
 
     @app.exception_handler(TenantAccessDenied)
@@ -415,6 +476,13 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
+        safe_details = [
+            {
+                "field": ".".join(str(part) for part in item.get("loc", ()) if part != "body"),
+                "type": str(item.get("type") or "invalid"),
+            }
+            for item in error.errors()
+        ]
         return JSONResponse(
             status_code=422,
             headers=_request_headers(request),
@@ -422,13 +490,20 @@ def create_app(
                 request=request,
                 code="VALIDATION_ERROR",
                 message="The request contains invalid or missing information.",
-                details=error.errors(),
+                details=safe_details,
             ),
         )
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, error: HTTPException) -> JSONResponse:
-        message = error.detail if isinstance(error.detail, str) else "The requested operation could not be completed."
+        retryable = error.status_code == 429 or error.status_code >= 500
+        message = (
+            "The requested operation could not be completed. Please try again."
+            if error.status_code >= 500
+            else error.detail
+            if isinstance(error.detail, str)
+            else "The requested operation could not be completed."
+        )
         return JSONResponse(
             status_code=error.status_code,
             headers=_request_headers(request, error.headers),
@@ -436,7 +511,8 @@ def create_app(
                 request=request,
                 code=f"HTTP_{error.status_code}",
                 message=message,
-                details=None if isinstance(error.detail, str) else error.detail,
+                details=None if isinstance(error.detail, str) or error.status_code >= 500 else error.detail,
+                retryable=retryable,
             ),
         )
 
@@ -456,6 +532,7 @@ def create_app(
                 request=request,
                 code="INTERNAL_SERVER_ERROR",
                 message="Something went wrong while processing this request.",
+                retryable=True,
             ),
         )
 
@@ -718,6 +795,14 @@ def create_app(
                 "source_url": source.youtube_url,
             },
         )
+        content.ensure_media_source(
+            principal,
+            project_id=source.project_id,
+            source_asset_id=source.id,
+            kind=source.kind,
+            title=source.title,
+            external_url=source.youtube_url,
+        )
 
     def register_job(principal: Principal, job: JobResponse) -> None:
         if job.project_id:
@@ -760,6 +845,150 @@ def create_app(
                     "storage_key": artifact_record.storage_key,
                 },
             )
+            if artifact.kind == "clip" and job.project_id:
+                content.ensure_rendered_clip(
+                    principal,
+                    project_id=job.project_id,
+                    source_id=job.source_id or None,
+                    artifact_id=artifact.id,
+                    title=Path(artifact.name).stem,
+                    duration_seconds=artifact.duration,
+                    output_format=artifact.output_format,
+                    captions_enabled=artifact.captions_enabled,
+                    job_id=job.id,
+                    index=artifact.index,
+                )
+
+    def resolve_script_project(
+        principal: Principal,
+        project_id: str | None,
+        title: str,
+    ) -> tuple[str, bool]:
+        if project_id:
+            tenants.require_access(principal, "project", project_id)
+            return project_id, False
+        project = clip_service.create_content_project(title, project_type="script")
+        register_project(principal, project)
+        return project.id, True
+
+    def clean_failed_script_project(principal: Principal, project_id: str, created: bool) -> None:
+        if not created:
+            return
+        with suppress(Exception):
+            content.delete_project(principal, project_id)
+        with suppress(Exception):
+            clip_service.delete_project(project_id)
+        with suppress(Exception):
+            tenants.delete_project(principal, project_id)
+
+    def script_brief(payload: ScriptGenerateRequest | ScriptActionRequest) -> ScriptBrief:
+        return ScriptBrief.model_validate(
+            payload.model_dump(exclude={"project_id", "action"})
+        )
+
+    def script_response(workspace: ScriptWorkspace) -> ScriptWorkspaceResponse:
+        return ScriptWorkspaceResponse(
+            source=ContentSourceResponse.model_validate(workspace.source),
+            item=ContentItemResponse.model_validate(workspace.item),
+            alternate_hooks=list(workspace.alternate_hooks),
+        )
+
+    @app.post(
+        "/api/scripts/manual",
+        response_model=ScriptWorkspaceResponse,
+        status_code=201,
+    )
+    def create_manual_script(
+        payload: ManualScriptCreateRequest,
+        principal: Principal = principal_dependency,
+    ) -> ScriptWorkspaceResponse:
+        project_id, created = resolve_script_project(
+            principal,
+            payload.project_id,
+            payload.title,
+        )
+        try:
+            return script_response(
+                script_studio.create_manual(
+                    principal,
+                    project_id,
+                    title=payload.title,
+                    script=payload.script,
+                    platform=payload.platform,
+                    language=payload.language,
+                    target_duration_seconds=payload.target_duration_seconds,
+                )
+            )
+        except Exception:
+            clean_failed_script_project(principal, project_id, created)
+            raise
+
+    @app.post(
+        "/api/scripts/generate",
+        response_model=ScriptWorkspaceResponse,
+        status_code=201,
+    )
+    def generate_script(
+        payload: ScriptGenerateRequest,
+        principal: Principal = principal_dependency,
+    ) -> ScriptWorkspaceResponse:
+        project_id, created = resolve_script_project(
+            principal,
+            payload.project_id,
+            payload.topic,
+        )
+        reservation = usage.reserve_many(
+            principal,
+            [UsageRequest("ai_editor_actions", 1)],
+            project_id=project_id,
+        )
+        try:
+            workspace = script_studio.generate(principal, project_id, script_brief(payload))
+            reservation.commit()
+            return script_response(workspace)
+        except Exception:
+            reservation.release()
+            clean_failed_script_project(principal, project_id, created)
+            raise
+
+    @app.post(
+        "/api/scripts/{content_id}/actions",
+        response_model=ScriptWorkspaceResponse,
+    )
+    def run_script_action(
+        content_id: str,
+        payload: ScriptActionRequest,
+        principal: Principal = principal_dependency,
+    ) -> ScriptWorkspaceResponse:
+        item = content.item(principal, content_id)
+        reservation = usage.reserve_many(
+            principal,
+            [UsageRequest("ai_editor_actions", 1)],
+            project_id=item.project_id,
+        )
+        try:
+            brief = script_brief(payload)
+            if payload.action == "generate_hooks":
+                workspace = script_studio.hooks(principal, content_id, brief=brief)
+            elif payload.action in {"adapt_youtube", "adapt_instagram"}:
+                workspace = script_studio.adapt(
+                    principal,
+                    content_id,
+                    platform=payload.action.removeprefix("adapt_"),
+                    brief=brief,
+                )
+            else:
+                workspace = script_studio.rewrite(
+                    principal,
+                    content_id,
+                    action=cast(ScriptRewriteAction, payload.action),
+                    brief=brief,
+                )
+            reservation.commit()
+            return script_response(workspace)
+        except Exception:
+            reservation.release()
+            raise
 
     @app.post("/api/sources/upload", response_model=SourceAssetResponse, status_code=201)
     def upload_source(
@@ -888,8 +1117,160 @@ def create_app(
         principal: Principal = principal_dependency,
     ) -> Response:
         tenants.require_access(principal, "project", project_id)
+        content.delete_project(principal, project_id)
         clip_service.delete_project(project_id)
         tenants.delete_project(principal, project_id)
+        return Response(status_code=204)
+
+    @app.get(
+        "/api/projects/{project_id}/sources/content",
+        response_model=list[ContentSourceResponse],
+    )
+    def list_content_sources(
+        project_id: str,
+        principal: Principal = principal_dependency,
+    ) -> list[ContentSourceResponse]:
+        tenants.require_access(principal, "project", project_id)
+        return [
+            ContentSourceResponse.model_validate(source)
+            for source in content_repository.list_sources(
+                principal.workspace_id,
+                project_id,
+                access_token=principal.access_token,
+            )
+        ]
+
+    @app.post(
+        "/api/projects/{project_id}/sources/content",
+        response_model=ContentSourceResponse,
+        status_code=201,
+    )
+    def create_content_source(
+        project_id: str,
+        payload: ContentSourceCreateRequest,
+        principal: Principal = principal_dependency,
+    ) -> ContentSourceResponse:
+        source = content.create_source(
+            principal,
+            project_id,
+            source_type=ContentSourceType(payload.source_type),
+            title=payload.title,
+            text_content=payload.text_content,
+            source_asset_id=payload.source_asset_id,
+            external_url=payload.external_url,
+            metadata=payload.metadata,
+            status=ContentSourceStatus(payload.status),
+            rights_confirmed=payload.rights_confirmed,
+        )
+        return ContentSourceResponse.model_validate(source)
+
+    @app.get(
+        "/api/projects/{project_id}/content",
+        response_model=list[ContentItemResponse],
+    )
+    def list_project_content(
+        project_id: str,
+        principal: Principal = principal_dependency,
+    ) -> list[ContentItemResponse]:
+        return [
+            ContentItemResponse.model_validate(item)
+            for item in content.list_project_content(principal, project_id)
+        ]
+
+    @app.post(
+        "/api/projects/{project_id}/content",
+        response_model=ContentItemResponse,
+        status_code=201,
+    )
+    def create_content_item(
+        project_id: str,
+        payload: ContentItemCreateRequest,
+        principal: Principal = principal_dependency,
+    ) -> ContentItemResponse:
+        values = payload.model_dump()
+        values["content_type"] = ContentType(payload.content_type)
+        values["status"] = ContentItemStatus(payload.status)
+        item = content.create_item(principal, project_id, **values)
+        return ContentItemResponse.model_validate(item)
+
+    @app.get("/api/content/{content_id}", response_model=ContentItemResponse)
+    def get_content_item(
+        content_id: str,
+        principal: Principal = principal_dependency,
+    ) -> ContentItemResponse:
+        return ContentItemResponse.model_validate(content.item(principal, content_id))
+
+    @app.patch("/api/content/{content_id}", response_model=ContentItemResponse)
+    def update_content_item(
+        content_id: str,
+        payload: ContentItemUpdateRequest,
+        principal: Principal = principal_dependency,
+    ) -> ContentItemResponse:
+        values = payload.model_dump(exclude_unset=True)
+        if values.get("status") is not None:
+            values["status"] = ContentItemStatus(values["status"])
+        item = content.update_item(principal, content_id, **values)
+        return ContentItemResponse.model_validate(item)
+
+    @app.delete("/api/content/{content_id}", status_code=204)
+    def delete_content_item(
+        content_id: str,
+        principal: Principal = principal_dependency,
+    ) -> Response:
+        content.delete_item(principal, content_id)
+        return Response(status_code=204)
+
+    @app.get(
+        "/api/content/{content_id}/targets",
+        response_model=list[PlatformTargetResponse],
+    )
+    def list_platform_targets(
+        content_id: str,
+        principal: Principal = principal_dependency,
+    ) -> list[PlatformTargetResponse]:
+        return [
+            PlatformTargetResponse.model_validate(target)
+            for target in content.list_targets(principal, content_id)
+        ]
+
+    @app.post(
+        "/api/content/{content_id}/targets",
+        response_model=PlatformTargetResponse,
+        status_code=201,
+    )
+    def create_platform_target(
+        content_id: str,
+        payload: PlatformTargetCreateRequest,
+        principal: Principal = principal_dependency,
+    ) -> PlatformTargetResponse:
+        values = payload.model_dump()
+        values["platform"] = TargetPlatform(payload.platform)
+        target = content.create_target(principal, content_id, **values)
+        return PlatformTargetResponse.model_validate(target)
+
+    @app.patch(
+        "/api/content/{content_id}/targets/{target_id}",
+        response_model=PlatformTargetResponse,
+    )
+    def update_platform_target(
+        content_id: str,
+        target_id: str,
+        payload: PlatformTargetUpdateRequest,
+        principal: Principal = principal_dependency,
+    ) -> PlatformTargetResponse:
+        values = payload.model_dump(exclude_unset=True)
+        if values.get("publish_status") is not None:
+            values["publish_status"] = PlatformTargetStatus(values["publish_status"])
+        target = content.update_target(principal, content_id, target_id, **values)
+        return PlatformTargetResponse.model_validate(target)
+
+    @app.delete("/api/content/{content_id}/targets/{target_id}", status_code=204)
+    def delete_platform_target(
+        content_id: str,
+        target_id: str,
+        principal: Principal = principal_dependency,
+    ) -> Response:
+        content.delete_target(principal, content_id, target_id)
         return Response(status_code=204)
 
     @app.post(
@@ -993,6 +1374,19 @@ def create_app(
         principal: Principal = principal_dependency,
     ) -> list[SocialConnectionResponse]:
         return clip_service.social_connections(principal)
+
+    @app.get(
+        "/api/social/capabilities",
+        response_model=list[ProviderCapabilitiesResponse],
+    )
+    def social_capabilities(
+        principal: Principal = principal_dependency,
+    ) -> list[ProviderCapabilitiesResponse]:
+        del principal
+        return [
+            ProviderCapabilitiesResponse.model_validate(asdict(capabilities))
+            for capabilities in social.capabilities()
+        ]
 
     @app.get(
         "/api/social/{platform}/authorize",

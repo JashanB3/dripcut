@@ -182,6 +182,18 @@ class WebClipService:
         summaries = self.container.projects.list_projects(limit=limit)
         return [self._project_response(summary) for summary in summaries]
 
+    def create_content_project(
+        self,
+        title: str,
+        *,
+        project_type: str,
+    ) -> ProjectResponse:
+        project = self.container.projects.create(title)
+        project.project_type = project_type
+        project.status = "draft"
+        self.container.projects.save(project)
+        return self._project_response(project.summary())
+
     def get_project(self, project_id: str) -> ProjectDetailResponse:
         project = self.container.projects.load(project_id)
         payload = self._project_response(project.summary()).model_dump()
@@ -912,6 +924,7 @@ class WebClipService:
             error=job.error,
             error_code=str(job.metadata.get("error_code") or "") or None,
             hint=job.hint,
+            retryable=bool(job.metadata.get("retryable", False)),
             created_at=job.created_at,
             started_at=job.started_at,
             finished_at=job.finished_at,
@@ -1120,7 +1133,10 @@ class WebClipService:
         return next(iter(unique), "both")
 
     def _project_response(self, summary: ProjectSummary) -> ProjectResponse:
-        workflow = "ai-editor" if summary.project_type == "ai_edit" else "auto-clip"
+        workflow = {
+            "ai_edit": "ai-editor",
+            "script": "script",
+        }.get(summary.project_type, "auto-clip")
         thumbnail_url = (
             f"/api/sources/{summary.source_asset_id}/poster"
             if summary.thumbnail and summary.source_asset_id

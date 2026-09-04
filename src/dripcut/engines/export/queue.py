@@ -297,6 +297,10 @@ class LocalJobQueue(JobQueue):
                     raise DripCutError("This job has nothing to do.")
                 result = job.run(job)
                 job.result = result if isinstance(result, JobResult) else JobResult()
+                job.error = None
+                job.hint = None
+                job.metadata.pop("error_code", None)
+                job.metadata.pop("retryable", None)
                 job.status = JobStatus.SUCCEEDED
                 job.progress = 1.0
                 job.stage = "Done"
@@ -313,8 +317,11 @@ class LocalJobQueue(JobQueue):
                 self._finish_cancelled(job, persist=False)
                 break
             except Exception as exc:  # noqa: BLE001 - worker isolation boundary
-                self._apply_failure(job, exc)
-                if job.attempt >= job.max_attempts or job.cancel_token.cancelled:
+                will_retry = (
+                    job.attempt < job.max_attempts and not job.cancel_token.cancelled
+                )
+                self._apply_failure(job, exc, terminal=not will_retry)
+                if not will_retry:
                     self._publish_failure(job)
                     break
                 job.status = JobStatus.QUEUED
@@ -327,18 +334,22 @@ class LocalJobQueue(JobQueue):
         job.finished_at = time.time()
         self._save_state()
 
-    def _apply_failure(self, job: Job, exc: Exception) -> None:
-        job.status = JobStatus.FAILED
-        job.stage = "Failed"
+    def _apply_failure(self, job: Job, exc: Exception, *, terminal: bool = True) -> None:
+        # A retry-pending job must remain nonterminal so waiters do not return early.
+        job.status = JobStatus.FAILED if terminal else JobStatus.RUNNING
+        job.stage = "Failed" if terminal else "Retry pending"
         if isinstance(exc, DripCutError):
             job.error = exc.message
             job.hint = exc.hint
             if error_code := getattr(exc, "code", None):
                 job.metadata["error_code"] = str(error_code)
+            job.metadata["retryable"] = bool(exc.retryable)
         else:
             job.error = "Something went wrong while rendering."
-            job.hint = str(exc)[:200]
+            job.hint = "Try the render again. If it still fails, contact support with the job ID."
             job.metadata.setdefault("error_code", "UNEXPECTED_WORKER_ERROR")
+            job.metadata["retryable"] = True
+            _log.exception("unexpected worker failure job_id=%s title=%s", job.id, job.title)
         job.metadata["last_attempt"] = job.attempt
 
     def _publish_failure(self, job: Job) -> None:

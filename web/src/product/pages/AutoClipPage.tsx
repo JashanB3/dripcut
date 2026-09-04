@@ -1,9 +1,10 @@
-import { ArrowLeft, Check, Film, Sparkles } from "lucide-react";
+import { ArrowLeft, Check, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { createClipJob, findViralMoments, getProject, importYouTube, uploadSource } from "../api/client";
 import { ClipControls } from "../components/ClipControls";
 import { ClipResults } from "../components/ClipResults";
+import { CustomerError } from "../components/CustomerError";
 import { RenderProgress } from "../components/RenderProgress";
 import { SourcePicker } from "../components/SourcePicker";
 import { SourceTimeline } from "../components/SourceTimeline";
@@ -16,7 +17,7 @@ const stepIndex = { source: 0, configure: 1, "render-preview": 2, results: 2 } a
 export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute) => void }) {
   const [state, dispatch] = useReducer(autoClipReducer, initialAutoClipState);
   const [runtime, setRuntime] = useState<RuntimeSource | null>(null);
-  const [sourceError, setSourceError] = useState("");
+  const [sourceError, setSourceError] = useState<unknown>(null);
   const [sourceBusy, setSourceBusy] = useState<"upload" | "youtube" | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [sourceStage, setSourceStage] = useState("");
@@ -31,14 +32,14 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
   };
 
   const loadFile = async (file: File) => {
-    setSourceError("");
+    setSourceError(null);
     setSourceBusy("upload");
     setUploadProgress(0);
     setSourceStage("Uploading video");
     try {
       acceptSource(await uploadSource(file, setUploadProgress), file);
     } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "DripCut could not import this video.");
+      setSourceError(error);
     } finally {
       setSourceBusy(null);
       setSourceStage("");
@@ -46,7 +47,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
   };
 
   const loadYouTube = async (url: string, rightsConfirmed: boolean) => {
-    setSourceError("");
+    setSourceError(null);
     setSourceBusy("youtube");
     setUploadProgress(0);
     setSourceStage("Fetching video information");
@@ -56,8 +57,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
         setSourceStage(stage);
       }));
     } catch (error) {
-      const hint = error && typeof error === "object" && "hint" in error ? ` ${(error as { hint?: string }).hint ?? ""}` : "";
-      setSourceError(`${error instanceof Error ? error.message : "YouTube import failed."}${hint}`.trim());
+      setSourceError(error);
     } finally {
       setSourceBusy(null);
       setSourceStage("");
@@ -97,7 +97,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
     }
     dispatch({ type: "set-ai-enabled", value: true });
     setAiBusy(true);
-    setSourceError("");
+    setSourceError(null);
     try {
       const platform = state.platforms.includes("instagram") ? "instagram" : "youtube";
       const recommendations = await findViralMoments(
@@ -112,8 +112,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
       }
     } catch (error) {
       dispatch({ type: "set-ai-enabled", value: false });
-      const hint = error && typeof error === "object" && "hint" in error ? ` ${(error as { hint?: string }).hint ?? ""}` : "";
-      setSourceError(`${error instanceof Error ? error.message : "AI analysis could not finish."}${hint}`.trim());
+      setSourceError(error);
     } finally {
       setAiBusy(false);
     }
@@ -122,7 +121,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
   const startRender = async () => {
     if (!state.source || segments.length === 0) return;
     setStarting(true);
-    setSourceError("");
+    setSourceError(null);
     try {
       const created = await createClipJob(state.source.id, segments, {
         outputFormat: state.outputFormat,
@@ -133,7 +132,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
       setJob(created);
       dispatch({ type: "preview-render" });
     } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "The render could not start.");
+      setSourceError(error);
     } finally {
       setStarting(false);
     }
@@ -153,7 +152,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
           {["Source", "Clips", "Finish"].map((step, index) => <span key={step} data-active={currentStep === index} data-complete={currentStep > index}><i>{currentStep > index ? <Check size={12} /> : index + 1}</i>{step}</span>)}
         </div>
       </header>
-      {sourceError && <div className="source-error-banner"><Film size={17} />{sourceError}</div>}
+      {sourceError !== null && <CustomerError error={sourceError} fallback="This clipping action could not be completed." />}
       {state.phase === "source" && <SourcePicker onFile={(file) => void loadFile(file)} onYouTube={(url, rightsConfirmed) => void loadYouTube(url, rightsConfirmed)} busy={sourceBusy} progress={uploadProgress} stage={sourceStage} />}
       {state.phase === "configure" && runtime && (
         <>

@@ -12,6 +12,20 @@ PostStatus = Literal["draft", "scheduled", "uploading", "published", "failed"]
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderCapabilities:
+    platform: PlatformName
+    can_upload_video: bool
+    can_publish_short: bool
+    can_schedule: bool
+    can_publish_thumbnail: bool
+    can_edit_metadata: bool
+    can_fetch_analytics: bool
+    supported_aspect_ratios: tuple[str, ...]
+    max_video_duration_seconds: int | None
+    supported_content_types: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class SocialCredentials:
     access_token: str
     refresh_token: str | None = None

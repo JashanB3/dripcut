@@ -2,6 +2,7 @@ import { Download, ImagePlus, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { createThumbnailCandidates, fetchProjects } from "../api/client";
+import { CustomerError } from "../components/CustomerError";
 import type { ApiArtifact, ApiProject, Platform, ThumbnailGeneration } from "../models";
 
 export function AIThumbnailPage() {
@@ -12,26 +13,26 @@ export function AIThumbnailPage() {
   const [candidates, setCandidates] = useState<ApiArtifact[]>([]);
   const [generation, setGeneration] = useState<ThumbnailGeneration | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
     void fetchProjects(100).then((items) => {
       const usable = items.filter((item) => item.sourceAssetId);
       setProjects(usable);
       setProjectId(usable[0]?.id ?? "");
-    }).catch(() => setError("Projects could not load."));
+    }).catch(setError);
   }, []);
 
   const generate = async () => {
     if (!projectId) return;
     setBusy(true);
-    setError("");
+    setError(null);
     try {
       const result = await createThumbnailCandidates(projectId, prompt, target);
       setCandidates(result.candidates);
       setGeneration(result);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Candidates could not be created.");
+      setError(reason);
     } finally {
       setBusy(false);
     }
@@ -39,7 +40,7 @@ export function AIThumbnailPage() {
 
   return <div className="thumbnail-page product-page">
     <header className="page-heading-row"><div><span className="eyebrow">Smart thumbnails</span><h1>Find the frame that earns the click.</h1><p>DripCut filters weak frames, scores composition and faces, then asks AI to rank the strongest choices.</p></div></header>
-    {error && <div className="source-error-banner">{error}</div>}
+    {error !== null && <CustomerError error={error} fallback="Thumbnail candidates could not be created." onRetry={projectId ? () => void generate() : undefined} />}
     <section className="thumbnail-controls">
       <label><span>Project</span><select value={projectId} onChange={(event) => setProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
       <label><span>Creative direction</span><input value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="High energy, clear subject, no text" /></label>

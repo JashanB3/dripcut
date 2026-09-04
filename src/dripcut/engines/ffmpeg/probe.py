@@ -139,7 +139,10 @@ class MediaProbe:
                 f"Reading {path.name} timed out.", hint="The file may be on a slow or offline volume."
             ) from exc
         except OSError as exc:  # pragma: no cover - depends on the host
-            raise MediaProbeError(f"ffprobe could not run: {exc}") from exc
+            raise MediaProbeError(
+                "DripCut could not inspect this media file.",
+                hint="Check that FFprobe is installed and try the file again.",
+            ) from exc
 
         if proc.returncode != 0 or not proc.stdout.strip():
             detail = (proc.stderr or "").strip().splitlines()

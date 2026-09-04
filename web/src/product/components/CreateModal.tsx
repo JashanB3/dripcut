@@ -3,6 +3,7 @@ import {
   CalendarClock,
   Clapperboard,
   Download,
+  FilePenLine,
   Film,
   ImagePlus,
   Search,
@@ -26,6 +27,7 @@ const workflowIcons: Record<string, typeof Film> = {
   "bulk-schedule": Download,
   "extract-audio": AudioLines,
   "video-extractor": Download,
+  "ai-script": FilePenLine,
 };
 
 export function CreateModal({ open, onClose, onNavigate }: {
@@ -80,6 +82,10 @@ export function CreateModal({ open, onClose, onNavigate }: {
 function WorkflowCard({ workflow, onNavigate }: { workflow: WorkflowDefinition; onNavigate: (route: ProductRoute) => void }) {
   const Icon = workflowIcons[workflow.id] ?? Film;
   const available = workflow.status === "available" && workflow.route;
+  const openScript = () => {
+    if (workflow.scriptPlatform) localStorage.setItem("dripcut.script.platform", workflow.scriptPlatform);
+    onNavigate("script");
+  };
   return (
     <article className={`workflow-card workflow-card--${workflow.accent}`}>
       <div className="workflow-card__icon"><Icon size={22} /></div>
@@ -88,9 +94,12 @@ function WorkflowCard({ workflow, onNavigate }: { workflow: WorkflowDefinition; 
         <h4>{workflow.title}</h4>
         <p>{workflow.description}</p>
       </div>
-      <button disabled={!available} onClick={() => available && onNavigate(workflow.route!)}>
-        {available ? "Start" : "Not connected"}
-      </button>
+      <div className="workflow-card__actions">
+        <button disabled={!available} onClick={() => available && onNavigate(workflow.route!)}>
+          {available ? "Start" : "In development"}
+        </button>
+        {workflow.scriptPlatform && <button className="workflow-card__script" onClick={openScript}>AI Script</button>}
+      </div>
     </article>
   );
 }

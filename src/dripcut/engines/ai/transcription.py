@@ -215,7 +215,8 @@ class TranscriptionEngine:
             raise
         except Exception as exc:  # noqa: BLE001 - surfaces as a friendly error
             raise TranscriptionError(
-                f"{media_path.name} could not be transcribed.", hint=str(exc)[:180]
+                f"{media_path.name} could not be transcribed.",
+                hint="Try again. If transcription still fails, contact support with the job ID.",
             ) from exc
         finally:
             for leftover in workdir.glob("*"):

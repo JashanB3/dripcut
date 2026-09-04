@@ -5,9 +5,16 @@ import type {
   ApiProject,
   AIEditPlan,
   AiRecommendation,
+  ContentItem,
+  ContentSource,
   OutputFormat,
   Platform,
+  PlatformTarget,
+  ProviderCapabilities,
   SavedSchedule,
+  ScriptAction,
+  ScriptBrief,
+  ScriptWorkspace,
   SocialConnection,
   SocialMetadataPackage,
   SourceAsset,
@@ -59,6 +66,7 @@ interface JobPayload {
   error?: string;
   error_code?: string;
   hint?: string;
+  retryable?: boolean;
   artifacts: ArtifactPayload[];
   zip_artifact?: ArtifactPayload;
 }
@@ -84,6 +92,76 @@ interface ProjectPayload {
   source?: SourcePayload;
 }
 
+interface ContentSourcePayload {
+  id: string;
+  workspace_id: string;
+  owner_id: string;
+  project_id: string;
+  source_type: ContentSource["sourceType"];
+  title: string;
+  text_content?: string;
+  source_asset_id?: string;
+  external_url?: string;
+  metadata: Record<string, unknown>;
+  status: ContentSource["status"];
+  rights_confirmed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ContentItemPayload {
+  id: string;
+  workspace_id: string;
+  owner_id: string;
+  project_id: string;
+  source_id?: string;
+  content_type: ContentItem["contentType"];
+  title: string;
+  script?: string;
+  hook?: string;
+  body?: string;
+  description?: string;
+  caption?: string;
+  hashtags: string[];
+  thumbnail_artifact_id?: string;
+  video_artifact_id?: string;
+  audio_artifact_id?: string;
+  duration_seconds?: number;
+  aspect_ratio?: string;
+  language?: string;
+  status: ContentItem["status"];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PlatformTargetPayload {
+  id: string;
+  workspace_id: string;
+  owner_id: string;
+  content_item_id: string;
+  platform: PlatformTarget["platform"];
+  social_connection_id?: string;
+  scheduled_at?: string;
+  source_timezone?: string;
+  publish_status: PlatformTarget["publishStatus"];
+  provider_post_id?: string;
+  provider_metadata: Record<string, unknown>;
+  idempotency_key?: string;
+  attempt_count: number;
+  last_error_code?: string;
+  last_error_message?: string;
+  published_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ScriptWorkspacePayload {
+  source: ContentSourcePayload;
+  item: ContentItemPayload;
+  alternate_hooks: string[];
+}
+
 interface UsageSummaryPayload {
   plan: string;
   plan_label: string;
@@ -107,14 +185,26 @@ export class ApiError extends Error {
   code?: string;
   status?: number;
   details?: unknown;
+  requestId?: string;
+  retryable: boolean;
 
-  constructor(message: string, hint?: string, code?: string, status?: number, details?: unknown) {
+  constructor(
+    message: string,
+    hint?: string,
+    code?: string,
+    status?: number,
+    details?: unknown,
+    requestId?: string,
+    retryable = false,
+  ) {
     super(message);
     this.name = "ApiError";
     this.hint = hint;
     this.code = code;
     this.status = status;
     this.details = details;
+    this.requestId = requestId;
+    this.retryable = retryable;
   }
 }
 
@@ -124,6 +214,7 @@ interface ErrorPayload {
   hint?: string;
   code?: string;
   request_id?: string;
+  retryable?: boolean;
   error?: ErrorPayload;
 }
 
@@ -149,12 +240,15 @@ function normalizeApiError(status: number, data: unknown): ApiError {
     const outer = data as ErrorPayload;
     const payload = outer.error ?? outer;
     const requestHint = payload.request_id ? `Request ID: ${payload.request_id}` : undefined;
+    const hint = [payload.hint, requestHint].filter(Boolean).join(" · ") || undefined;
     return new ApiError(
       payload.message || payload.detail || `DripCut API returned ${status}.`,
-      payload.hint || requestHint,
+      hint,
       payload.code,
       status,
       data,
+      payload.request_id,
+      payload.retryable ?? (status === 429 || status >= 500),
     );
   }
   if (typeof data === "string" && data.trim()) {
@@ -309,6 +403,7 @@ const jobFromPayload = (payload: JobPayload): ApiJob => ({
   error: payload.error,
   errorCode: payload.error_code,
   hint: payload.hint,
+  retryable: payload.retryable ?? false,
   artifacts: payload.artifacts.map(artifactFromPayload),
   zipArtifact: payload.zip_artifact ? artifactFromPayload(payload.zip_artifact) : undefined,
 });
@@ -430,6 +525,70 @@ const projectFromPayload = (payload: ProjectPayload): ApiProject => ({
   source: payload.source ? sourceFromPayload(payload.source) : undefined,
 });
 
+const contentSourceFromPayload = (payload: ContentSourcePayload): ContentSource => ({
+  id: payload.id,
+  workspaceId: payload.workspace_id,
+  ownerId: payload.owner_id,
+  projectId: payload.project_id,
+  sourceType: payload.source_type,
+  title: payload.title,
+  textContent: payload.text_content,
+  sourceAssetId: payload.source_asset_id,
+  externalUrl: payload.external_url,
+  metadata: payload.metadata,
+  status: payload.status,
+  rightsConfirmed: payload.rights_confirmed,
+  createdAt: payload.created_at,
+  updatedAt: payload.updated_at,
+});
+
+const contentItemFromPayload = (payload: ContentItemPayload): ContentItem => ({
+  id: payload.id,
+  workspaceId: payload.workspace_id,
+  ownerId: payload.owner_id,
+  projectId: payload.project_id,
+  sourceId: payload.source_id,
+  contentType: payload.content_type,
+  title: payload.title,
+  script: payload.script,
+  hook: payload.hook,
+  body: payload.body,
+  description: payload.description,
+  caption: payload.caption,
+  hashtags: payload.hashtags,
+  thumbnailArtifactId: payload.thumbnail_artifact_id,
+  videoArtifactId: payload.video_artifact_id,
+  audioArtifactId: payload.audio_artifact_id,
+  durationSeconds: payload.duration_seconds,
+  aspectRatio: payload.aspect_ratio,
+  language: payload.language,
+  status: payload.status,
+  metadata: payload.metadata,
+  createdAt: payload.created_at,
+  updatedAt: payload.updated_at,
+});
+
+const platformTargetFromPayload = (payload: PlatformTargetPayload): PlatformTarget => ({
+  id: payload.id,
+  workspaceId: payload.workspace_id,
+  ownerId: payload.owner_id,
+  contentItemId: payload.content_item_id,
+  platform: payload.platform,
+  socialConnectionId: payload.social_connection_id,
+  scheduledAt: payload.scheduled_at,
+  sourceTimezone: payload.source_timezone,
+  publishStatus: payload.publish_status,
+  providerPostId: payload.provider_post_id,
+  providerMetadata: payload.provider_metadata,
+  idempotencyKey: payload.idempotency_key,
+  attemptCount: payload.attempt_count,
+  lastErrorCode: payload.last_error_code,
+  lastErrorMessage: payload.last_error_message,
+  publishedAt: payload.published_at,
+  createdAt: payload.created_at,
+  updatedAt: payload.updated_at,
+});
+
 export async function fetchProjects(limit = 20): Promise<ApiProject[]> {
   return (await requestJson<ProjectPayload[]>(`/api/projects?limit=${limit}`, { cache: "no-store" })).map(projectFromPayload);
 }
@@ -489,6 +648,134 @@ export async function getProject(projectId: string): Promise<ApiProject> {
     cache: "no-store",
   });
   return projectFromPayload(payload);
+}
+
+export async function fetchProjectContentSources(projectId: string): Promise<ContentSource[]> {
+  const payload = await requestJson<ContentSourcePayload[]>(
+    `/api/projects/${encodeURIComponent(projectId)}/sources/content`,
+    { cache: "no-store" },
+  );
+  return payload.map(contentSourceFromPayload);
+}
+
+export async function fetchProjectContent(projectId: string): Promise<ContentItem[]> {
+  const payload = await requestJson<ContentItemPayload[]>(
+    `/api/projects/${encodeURIComponent(projectId)}/content`,
+    { cache: "no-store" },
+  );
+  return payload.map(contentItemFromPayload);
+}
+
+const scriptBriefPayload = (brief: ScriptBrief) => ({
+  topic: brief.topic,
+  platform: brief.platform,
+  audience: brief.audience,
+  tone: brief.tone,
+  language: brief.language,
+  target_duration_seconds: brief.targetDurationSeconds,
+  content_goal: brief.contentGoal,
+  cta: brief.cta,
+  reference_text: brief.referenceText,
+});
+
+const scriptWorkspaceFromPayload = (payload: ScriptWorkspacePayload): ScriptWorkspace => ({
+  source: contentSourceFromPayload(payload.source),
+  item: contentItemFromPayload(payload.item),
+  alternateHooks: payload.alternate_hooks,
+});
+
+export async function fetchContentItem(contentId: string): Promise<ContentItem> {
+  const payload = await requestJson<ContentItemPayload>(
+    `/api/content/${encodeURIComponent(contentId)}`,
+    { cache: "no-store" },
+  );
+  return contentItemFromPayload(payload);
+}
+
+export async function createManualScript(input: {
+  projectId?: string;
+  title: string;
+  script: string;
+  platform: Platform;
+  language: string;
+  targetDurationSeconds: number;
+}): Promise<ScriptWorkspace> {
+  const payload = await requestJson<ScriptWorkspacePayload>("/api/scripts/manual", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: input.projectId,
+      title: input.title,
+      script: input.script,
+      platform: input.platform,
+      language: input.language,
+      target_duration_seconds: input.targetDurationSeconds,
+    }),
+  });
+  return scriptWorkspaceFromPayload(payload);
+}
+
+export async function generateScript(
+  brief: ScriptBrief,
+  projectId?: string,
+): Promise<ScriptWorkspace> {
+  const payload = await requestJson<ScriptWorkspacePayload>("/api/scripts/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...scriptBriefPayload(brief), project_id: projectId }),
+  }, 120_000);
+  return scriptWorkspaceFromPayload(payload);
+}
+
+export async function runScriptAction(
+  contentId: string,
+  action: ScriptAction,
+  brief: ScriptBrief,
+): Promise<ScriptWorkspace> {
+  const payload = await requestJson<ScriptWorkspacePayload>(
+    `/api/scripts/${encodeURIComponent(contentId)}/actions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...scriptBriefPayload(brief), action }),
+    },
+    120_000,
+  );
+  return scriptWorkspaceFromPayload(payload);
+}
+
+export async function updateContentItem(
+  contentId: string,
+  updates: Partial<Pick<ContentItem, "title" | "script" | "hook" | "description" | "caption" | "hashtags" | "durationSeconds" | "language" | "status" | "metadata">>,
+): Promise<ContentItem> {
+  const payload = await requestJson<ContentItemPayload>(
+    `/api/content/${encodeURIComponent(contentId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: updates.title,
+        script: updates.script,
+        hook: updates.hook,
+        description: updates.description,
+        caption: updates.caption,
+        hashtags: updates.hashtags,
+        duration_seconds: updates.durationSeconds,
+        language: updates.language,
+        status: updates.status,
+        metadata: updates.metadata,
+      }),
+    },
+  );
+  return contentItemFromPayload(payload);
+}
+
+export async function fetchContentTargets(contentId: string): Promise<PlatformTarget[]> {
+  const payload = await requestJson<PlatformTargetPayload[]>(
+    `/api/content/${encodeURIComponent(contentId)}/targets`,
+    { cache: "no-store" },
+  );
+  return payload.map(platformTargetFromPayload);
 }
 
 export async function createThumbnailCandidates(
@@ -646,6 +933,33 @@ export async function fetchSocialConnections(): Promise<SocialConnection[]> {
     platform: Platform; label: string; connected: boolean; configured: boolean; detail: string; setup_hint: string;
   }>>("/api/social/connections", { cache: "no-store" });
   return payload.map((item) => ({ ...item, setupHint: item.setup_hint }));
+}
+
+export async function fetchProviderCapabilities(): Promise<ProviderCapabilities[]> {
+  const payload = await requestJson<Array<{
+    platform: Platform;
+    can_upload_video: boolean;
+    can_publish_short: boolean;
+    can_schedule: boolean;
+    can_publish_thumbnail: boolean;
+    can_edit_metadata: boolean;
+    can_fetch_analytics: boolean;
+    supported_aspect_ratios: string[];
+    max_video_duration_seconds?: number | null;
+    supported_content_types: ProviderCapabilities["supportedContentTypes"];
+  }>>("/api/social/capabilities", { cache: "no-store" });
+  return payload.map((item) => ({
+    platform: item.platform,
+    canUploadVideo: item.can_upload_video,
+    canPublishShort: item.can_publish_short,
+    canSchedule: item.can_schedule,
+    canPublishThumbnail: item.can_publish_thumbnail,
+    canEditMetadata: item.can_edit_metadata,
+    canFetchAnalytics: item.can_fetch_analytics,
+    supportedAspectRatios: item.supported_aspect_ratios,
+    maxVideoDurationSeconds: item.max_video_duration_seconds ?? undefined,
+    supportedContentTypes: item.supported_content_types,
+  }));
 }
 
 export async function beginSocialOAuth(platform: Platform): Promise<string> {

@@ -32,6 +32,31 @@ test.describe("creator clipping journey", () => {
     expect(response.status()).toBe(200);
     expect((await response.body()).byteLength).toBeGreaterThan(1_000);
 
+    const universalContent = await page.evaluate(async () => {
+      const projectsResponse = await fetch("/api/projects?limit=10");
+      const projects = await projectsResponse.json();
+      const project = projects.find((item: { status: string }) => item.status === "completed");
+      const [contentResponse, capabilitiesResponse] = await Promise.all([
+        fetch(`/api/projects/${encodeURIComponent(project.id)}/content`),
+        fetch("/api/social/capabilities"),
+      ]);
+      return {
+        content: await contentResponse.json(),
+        capabilities: await capabilitiesResponse.json(),
+      };
+    });
+    expect(universalContent.content).toEqual([
+      expect.objectContaining({ content_type: "video_clip", status: "ready" }),
+    ]);
+    expect(universalContent.capabilities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ platform: "youtube", can_schedule: true }),
+      expect.objectContaining({ platform: "instagram", can_schedule: true }),
+    ]));
+
+    await page.goto("/schedule");
+    await expect(page.getByRole("button", { name: "YouTube", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Instagram", exact: true })).toBeEnabled();
+
     await page.goto("/logout");
     await expect(page).toHaveURL(/\/login$/);
     await page.getByLabel("Email").fill(email);

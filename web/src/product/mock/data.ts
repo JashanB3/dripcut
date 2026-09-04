@@ -65,6 +65,7 @@ export const workflows: WorkflowDefinition[] = [
     route: "auto-clip",
     status: "available",
     accent: "coral",
+    scriptPlatform: "youtube",
   },
   {
     id: "instagram-reels",
@@ -74,6 +75,17 @@ export const workflows: WorkflowDefinition[] = [
     route: "auto-clip",
     status: "available",
     accent: "cyan",
+    scriptPlatform: "instagram",
+  },
+  {
+    id: "ai-script",
+    title: "AI Script",
+    description: "Write, generate, and refine a ready-to-record short-form script.",
+    category: "AI Tools",
+    route: "script",
+    status: "available",
+    accent: "violet",
+    badge: "New",
   },
   {
     id: "ai-editor",

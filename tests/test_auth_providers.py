@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from dripcut.api.contracts import OAuthTokenRequest
 from dripcut.auth.provider import build_auth_provider
 from dripcut.auth.supabase import SupabaseAuthProvider
 from dripcut.tenancy.supabase import SupabaseTenantRepository
@@ -75,6 +76,15 @@ def test_supabase_google_authorize_url_contains_provider_and_redirect() -> None:
         "provider": ["google"],
         "redirect_to": ["https://app.example.com/auth/callback"],
     }
+
+
+def test_oauth_exchange_accepts_supabase_short_refresh_tokens() -> None:
+    payload = OAuthTokenRequest(
+        access_token="header.payload.signature",
+        refresh_token="shorttoken",
+    )
+
+    assert payload.refresh_token == "shorttoken"
 
 
 def test_production_rejects_local_auth_provider(tmp_path, monkeypatch) -> None:

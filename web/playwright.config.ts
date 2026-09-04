@@ -1,5 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const apiPort = process.env.DRIPCUT_E2E_API_PORT || "8000";
+const webPort = process.env.DRIPCUT_E2E_WEB_PORT || "5173";
+const apiUrl = `http://127.0.0.1:${apiPort}`;
+const webUrl = `http://127.0.0.1:${webPort}`;
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 120_000,
@@ -11,7 +16,7 @@ export default defineConfig({
   reporter: process.env.CI ? [["line"], ["html", { open: "never" }]] : "list",
   globalSetup: "./e2e/global.setup.ts",
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: webUrl,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "off",
@@ -24,15 +29,15 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "DRIPCUT_HOME=/tmp/dripcut-playwright DRIPCUT_OUTPUT=/tmp/dripcut-playwright/out DRIPCUT_ENV=development DRIPCUT_AUTH_PROVIDER=local DRIPCUT_TENANT_PROVIDER=local DRIPCUT_USAGE_PROVIDER=local DRIPCUT_AUTH_REQUIRED=1 ../.venv/bin/python -m uvicorn dripcut.api.app:create_app --factory --host 127.0.0.1 --port 8000",
-      url: "http://127.0.0.1:8000/api/health",
+      command: `DRIPCUT_HOME=/tmp/dripcut-playwright DRIPCUT_OUTPUT=/tmp/dripcut-playwright/out DRIPCUT_ENV=development DRIPCUT_AUTH_PROVIDER=local DRIPCUT_TENANT_PROVIDER=local DRIPCUT_USAGE_PROVIDER=local DRIPCUT_AUTH_REQUIRED=1 ../.venv/bin/python -m uvicorn dripcut.api.app:create_app --factory --host 127.0.0.1 --port ${apiPort}`,
+      url: `${apiUrl}/api/health`,
       cwd: ".",
       timeout: 120_000,
       reuseExistingServer: !process.env.CI,
     },
     {
-      command: "npm run dev",
-      url: "http://127.0.0.1:5173",
+      command: `DRIPCUT_WEB_PORT=${webPort} DRIPCUT_API_PROXY_URL=${apiUrl} npm run dev`,
+      url: webUrl,
       cwd: ".",
       timeout: 120_000,
       reuseExistingServer: !process.env.CI,

@@ -2,19 +2,20 @@ import { Clapperboard, Download, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { apiUrl, fetchProjects } from "../api/client";
+import { CustomerError } from "../components/CustomerError";
 import type { ApiProject, ProductRoute } from "../models";
 
 export function ProjectsPage({ onNavigate }: { onNavigate: (route: ProductRoute) => void }) {
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [busy, setBusy] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
 
   const refresh = useCallback(() => {
     setBusy(true);
-    setError("");
+    setError(null);
     void fetchProjects(100)
       .then(setProjects)
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Projects could not load."))
+      .catch(setError)
       .finally(() => setBusy(false));
   }, []);
 
@@ -31,7 +32,7 @@ export function ProjectsPage({ onNavigate }: { onNavigate: (route: ProductRoute)
         <div><span className="eyebrow">Library</span><h1>Your projects</h1><p>Every imported source and finished render, saved automatically.</p></div>
         <button className="secondary-action" onClick={refresh} disabled={busy}><RefreshCw size={16} /> Refresh</button>
       </header>
-      {error && <div className="source-error-banner">{error}</div>}
+      {error !== null && <CustomerError error={error} fallback="Projects could not load." onRetry={refresh} />}
       {!busy && projects.length === 0 && <div className="projects-empty projects-empty--large"><Clapperboard size={30} /><strong>No projects yet</strong><span>Your first source will appear here and remain available after a restart.</span><button onClick={() => onNavigate("auto-clip")}>Create clips</button></div>}
       <div className="projects-grid">
         {projects.map((project) => (

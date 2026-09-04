@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ErrorDetail(BaseModel):
@@ -13,6 +13,7 @@ class ErrorDetail(BaseModel):
     code: str | None = None
     details: object | list[object] | None = None
     request_id: str | None = None
+    retryable: bool = False
 
 
 class ErrorResponse(BaseModel):
@@ -42,7 +43,7 @@ class PasswordResetRequest(BaseModel):
 
 class OAuthTokenRequest(BaseModel):
     access_token: str = Field(min_length=20, max_length=8192)
-    refresh_token: str = Field(min_length=20, max_length=8192)
+    refresh_token: str = Field(min_length=1, max_length=8192)
 
 
 class AuthUserResponse(BaseModel):
@@ -152,6 +153,7 @@ class JobResponse(BaseModel):
     error: str | None = None
     error_code: str | None = None
     hint: str | None = None
+    retryable: bool = False
     created_at: float
     started_at: float | None = None
     finished_at: float | None = None
@@ -445,3 +447,243 @@ class ScheduleResponse(BaseModel):
     created_at: float
     posts: list[ScheduledPostResponse]
     publish_ready: bool
+
+
+ContentSourceTypeValue = Literal[
+    "video_upload", "youtube_url", "script", "ai_script", "ai_prompt"
+]
+ContentTypeValue = Literal["video_clip", "script", "ai_script", "ai_video"]
+ContentStatusValue = Literal[
+    "draft", "generating", "review", "ready", "scheduled",
+    "partially_published", "published", "failed", "archived",
+]
+TargetPlatformValue = Literal[
+    "youtube", "instagram", "facebook", "tiktok", "bilibili", "linkedin"
+]
+TargetStatusValue = Literal[
+    "draft", "ready", "scheduled", "queued", "uploading",
+    "processing", "published", "failed", "cancelled",
+]
+
+
+class ContentSourceCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: ContentSourceTypeValue
+    title: str = Field(min_length=1, max_length=180)
+    text_content: str | None = Field(default=None, max_length=100_000)
+    source_asset_id: str | None = Field(default=None, max_length=64)
+    external_url: str | None = Field(default=None, max_length=2048)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["draft", "importing", "ready", "failed"] = "draft"
+    rights_confirmed: bool = False
+
+    @model_validator(mode="after")
+    def validate_source_payload(self) -> ContentSourceCreateRequest:
+        if self.source_type == "video_upload" and not self.source_asset_id:
+            raise ValueError("A video upload source requires source_asset_id.")
+        if self.source_type == "youtube_url" and not (
+            self.source_asset_id or (self.external_url or "").strip()
+        ):
+            raise ValueError("A YouTube source requires external_url or source_asset_id.")
+        if self.source_type in {"script", "ai_script", "ai_prompt"} and not (
+            self.text_content or ""
+        ).strip():
+            raise ValueError("This source type requires text_content.")
+        return self
+
+
+class ContentSourceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    workspace_id: str
+    owner_id: str
+    project_id: str
+    source_type: ContentSourceTypeValue
+    title: str
+    text_content: str | None = None
+    source_asset_id: str | None = None
+    external_url: str | None = None
+    metadata: dict[str, Any]
+    status: Literal["draft", "importing", "ready", "failed"]
+    rights_confirmed: bool
+    created_at: str
+    updated_at: str
+
+
+class ContentItemCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str | None = Field(default=None, max_length=64)
+    content_type: ContentTypeValue
+    title: str = Field(min_length=1, max_length=180)
+    script: str | None = Field(default=None, max_length=100_000)
+    hook: str | None = Field(default=None, max_length=2000)
+    body: str | None = Field(default=None, max_length=100_000)
+    description: str | None = Field(default=None, max_length=10_000)
+    caption: str | None = Field(default=None, max_length=10_000)
+    hashtags: list[str] = Field(default_factory=list, max_length=50)
+    thumbnail_artifact_id: str | None = Field(default=None, max_length=64)
+    video_artifact_id: str | None = Field(default=None, max_length=64)
+    audio_artifact_id: str | None = Field(default=None, max_length=64)
+    duration_seconds: float | None = Field(default=None, ge=0)
+    aspect_ratio: str | None = Field(default=None, max_length=20)
+    language: str | None = Field(default=None, max_length=40)
+    status: ContentStatusValue = "draft"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ContentItemUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=180)
+    script: str | None = Field(default=None, max_length=100_000)
+    hook: str | None = Field(default=None, max_length=2000)
+    body: str | None = Field(default=None, max_length=100_000)
+    description: str | None = Field(default=None, max_length=10_000)
+    caption: str | None = Field(default=None, max_length=10_000)
+    hashtags: list[str] | None = Field(default=None, max_length=50)
+    duration_seconds: float | None = Field(default=None, ge=0)
+    aspect_ratio: str | None = Field(default=None, max_length=20)
+    language: str | None = Field(default=None, max_length=40)
+    status: ContentStatusValue | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class ContentItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    workspace_id: str
+    owner_id: str
+    project_id: str
+    source_id: str | None = None
+    content_type: ContentTypeValue
+    title: str
+    script: str | None = None
+    hook: str | None = None
+    body: str | None = None
+    description: str | None = None
+    caption: str | None = None
+    hashtags: list[str]
+    thumbnail_artifact_id: str | None = None
+    video_artifact_id: str | None = None
+    audio_artifact_id: str | None = None
+    duration_seconds: float | None = None
+    aspect_ratio: str | None = None
+    language: str | None = None
+    status: ContentStatusValue
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class PlatformTargetCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    platform: TargetPlatformValue
+    social_connection_id: str | None = Field(default=None, max_length=64)
+    scheduled_at: str | None = Field(default=None, max_length=80)
+    source_timezone: str | None = Field(default=None, max_length=80)
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = Field(default=None, max_length=200)
+
+
+class PlatformTargetUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    social_connection_id: str | None = Field(default=None, max_length=64)
+    scheduled_at: str | None = Field(default=None, max_length=80)
+    source_timezone: str | None = Field(default=None, max_length=80)
+    publish_status: TargetStatusValue | None = None
+    provider_metadata: dict[str, Any] | None = None
+
+
+class PlatformTargetResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    workspace_id: str
+    owner_id: str
+    content_item_id: str
+    platform: TargetPlatformValue
+    social_connection_id: str | None = None
+    scheduled_at: str | None = None
+    source_timezone: str | None = None
+    publish_status: TargetStatusValue
+    provider_post_id: str | None = None
+    provider_metadata: dict[str, Any]
+    idempotency_key: str | None = None
+    attempt_count: int
+    last_error_code: str | None = None
+    last_error_message: str | None = None
+    published_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
+ScriptActionValue = Literal[
+    "rewrite_hook",
+    "generate_hooks",
+    "shorten",
+    "expand",
+    "conversational",
+    "educational",
+    "engaging",
+    "rewrite_cta",
+    "adapt_youtube",
+    "adapt_instagram",
+]
+
+
+class ScriptBriefRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str = Field(min_length=2, max_length=500)
+    platform: Literal["youtube", "instagram"]
+    audience: str = Field(min_length=1, max_length=240)
+    tone: str = Field(min_length=1, max_length=100)
+    language: str = Field(min_length=2, max_length=40)
+    target_duration_seconds: int = Field(ge=10, le=600)
+    content_goal: str = Field(min_length=1, max_length=300)
+    cta: str = Field(default="", max_length=300)
+    reference_text: str = Field(default="", max_length=20_000)
+
+
+class ScriptGenerateRequest(ScriptBriefRequest):
+    project_id: str | None = Field(default=None, max_length=64)
+
+
+class ManualScriptCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str | None = Field(default=None, max_length=64)
+    title: str = Field(min_length=1, max_length=180)
+    script: str = Field(min_length=1, max_length=100_000)
+    platform: Literal["youtube", "instagram"]
+    language: str = Field(min_length=2, max_length=40)
+    target_duration_seconds: int = Field(ge=10, le=600)
+
+
+class ScriptActionRequest(ScriptBriefRequest):
+    action: ScriptActionValue
+
+
+class ScriptWorkspaceResponse(BaseModel):
+    source: ContentSourceResponse
+    item: ContentItemResponse
+    alternate_hooks: list[str] = Field(default_factory=list)
+
+
+class ProviderCapabilitiesResponse(BaseModel):
+    platform: Literal["youtube", "instagram"]
+    can_upload_video: bool
+    can_publish_short: bool
+    can_schedule: bool
+    can_publish_thumbnail: bool
+    can_edit_metadata: bool
+    can_fetch_analytics: bool
+    supported_aspect_ratios: list[str]
+    max_video_duration_seconds: int | None = None
+    supported_content_types: list[str]

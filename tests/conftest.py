@@ -39,6 +39,8 @@ def isolated_paths(monkeypatch: pytest.MonkeyPatch, app_home: Path, tmp_path: Pa
     monkeypatch.setenv("DRIPCUT_ENV", "development")
     monkeypatch.setenv("DRIPCUT_AUTH_PROVIDER", "local")
     monkeypatch.setenv("DRIPCUT_TENANT_PROVIDER", "local")
+    monkeypatch.setenv("DRIPCUT_STORAGE_PROVIDER", "local")
+    monkeypatch.setenv("DRIPCUT_SOCIAL_STORE", "local")
     monkeypatch.setenv("DRIPCUT_AUTH_REQUIRED", "0")
     app_paths.cache_clear()
     yield

@@ -11,7 +11,8 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { ApiError, fetchUsage } from "../api/client";
+import { fetchUsage } from "../api/client";
+import { CustomerError } from "../components/CustomerError";
 import type { UsageMetric, UsageSummary } from "../models";
 
 const metricIcons: Record<string, typeof Clapperboard> = {
@@ -36,16 +37,16 @@ function formatAmount(value: number, metric: UsageMetric): string {
 
 export function UsagePage() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
     setLoading(true);
-    setError("");
+    setError(null);
     try {
       setSummary(await fetchUsage());
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Usage could not be loaded.");
+      setError(caught);
     } finally {
       setLoading(false);
     }
@@ -73,7 +74,7 @@ export function UsagePage() {
         </button>
       </header>
 
-      {error && <div className="usage-error" role="alert">{error}</div>}
+      {error !== null && <CustomerError error={error} fallback="Usage could not be loaded." onRetry={() => void load()} />}
       {loading && !summary && <div className="usage-loading"><span className="auth-loader" />Loading live usage...</div>}
 
       {summary && (

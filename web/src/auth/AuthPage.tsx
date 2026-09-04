@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { ApiError, requestJson } from "../product/api/client";
+import { CustomerError } from "../product/components/CustomerError";
 import { exchangeOAuthTokens, googleAuthorize, navigatePath, useAuth } from "./authState";
 
 type AuthPageKind = "login" | "signup" | "forgot-password" | "reset-password" | "callback" | "logout";
@@ -22,7 +23,7 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
     if (kind === "logout") {
@@ -39,14 +40,14 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
       void exchangeOAuthTokens(accessToken, refreshToken)
         .then(refresh)
         .then(() => navigatePath("/home", true))
-        .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Google login failed."));
+        .catch(setError);
     }
   }, [kind, logout, refresh]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
-    setError("");
+    setError(null);
     setMessage("");
     try {
       if (kind === "login") {
@@ -79,7 +80,7 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
       }
     } catch (reason) {
       const failure = reason as ApiError;
-      setError(failure.message || "Unable to continue.");
+      setError(failure);
     } finally {
       setBusy(false);
     }
@@ -103,7 +104,7 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
         <h2>{title}</h2><p>{subtitle}</p>
         {isPassive ? <div className="auth-loader" /> : (
           <form onSubmit={submit}>
-            {(kind === "login" || kind === "signup") && <button type="button" className="oauth-button" onClick={() => void googleAuthorize().catch((reason: Error) => setError(reason.message))}>Continue with Google</button>}
+            {(kind === "login" || kind === "signup") && <button type="button" className="oauth-button" onClick={() => void googleAuthorize().catch(setError)}>Continue with Google</button>}
             {(kind === "login" || kind === "signup") && <div className="auth-divider"><span>or use your email</span></div>}
             {kind === "signup" && <label>Name<input value={name} onChange={(event) => setName(event.target.value)} required autoComplete="name" placeholder="Your creator name" /></label>}
             {kind !== "reset-password" && <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="email" placeholder="you@example.com" /></label>}
@@ -113,7 +114,7 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
           </form>
         )}
         {message && <div className="auth-message auth-message--success">{message}</div>}
-        {error && <div className="auth-message auth-message--error">{error}</div>}
+        {error !== null && <CustomerError error={error} fallback="Unable to continue." />}
         {!isPassive && <button className="auth-switch" onClick={() => navigatePath(kind === "login" ? "/signup" : "/login")}>{kind === "login" ? "New to DripCut? Create an account" : "Already have an account? Log in"}</button>}
       </section>
     </div>

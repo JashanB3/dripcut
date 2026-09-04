@@ -13,6 +13,7 @@ import { AutoClipPage } from "./product/pages/AutoClipPage";
 import { HomePage } from "./product/pages/HomePage";
 import { ProjectsPage } from "./product/pages/ProjectsPage";
 import { SchedulePage } from "./product/pages/SchedulePage";
+import { ScriptStudioPage } from "./product/pages/ScriptStudioPage";
 import { SettingsPage } from "./product/pages/SettingsPage";
 import { TemplatesPage } from "./product/pages/TemplatesPage";
 import { UsagePage } from "./product/pages/UsagePage";
@@ -84,6 +85,7 @@ export function App() {
       {route === "templates" && <TemplatesPage onNavigate={goTo} />}
       {route === "ai-editor" && <AIEditorPage />}
       {route === "ai-thumbnail" && <AIThumbnailPage />}
+      {route === "script" && <ScriptStudioPage />}
       {route === "schedule" && <SchedulePage />}
       {route === "usage" && <UsagePage />}
       {route === "admin" && auth.session.user.is_dripcut_admin && <AdminPage />}

@@ -233,7 +233,11 @@ class FFmpegRunner:
                 bufsize=1,
             )
         except OSError as exc:  # pragma: no cover - depends on the host
-            raise FFmpegError("FFmpeg could not be started.", command=command, hint=str(exc)) from exc
+            raise FFmpegError(
+                "FFmpeg could not be started.",
+                command=command,
+                hint="Check that FFmpeg is installed and available, then try again.",
+            ) from exc
 
         stderr_thread = threading.Thread(
             target=self._drain, args=(process.stderr, stderr_buffer), daemon=True

@@ -1,19 +1,21 @@
 import { CalendarClock, CheckCircle2, Instagram, Sparkles, Youtube } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { beginSocialOAuth, disconnectSocial, fetchProjects, fetchSchedule, fetchSocialConnections, generateSocialMetadata, saveSchedule, updateScheduledPost } from "../api/client";
-import type { ApiProject, Platform, SavedSchedule, SocialConnection, SocialMetadataPackage } from "../models";
+import { beginSocialOAuth, disconnectSocial, fetchProjects, fetchProviderCapabilities, fetchSchedule, fetchSocialConnections, generateSocialMetadata, saveSchedule, updateScheduledPost } from "../api/client";
+import { CustomerError } from "../components/CustomerError";
+import type { ApiProject, Platform, ProviderCapabilities, SavedSchedule, SocialConnection, SocialMetadataPackage } from "../models";
 
 export function SchedulePage() {
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [projectId, setProjectId] = useState("");
   const [connections, setConnections] = useState<SocialConnection[]>([]);
+  const [capabilities, setCapabilities] = useState<ProviderCapabilities[]>([]);
   const [platforms, setPlatforms] = useState<Platform[]>(["youtube", "instagram"]);
   const [interval, setInterval] = useState(1440);
   const [startAt, setStartAt] = useState("");
   const [caption, setCaption] = useState("{clip} #shorts #reels");
   const [schedule, setSchedule] = useState<SavedSchedule | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [metadata, setMetadata] = useState<SocialMetadataPackage | null>(null);
   const [connectionBusy, setConnectionBusy] = useState<Platform | null>(null);
@@ -23,12 +25,13 @@ export function SchedulePage() {
     const socialResult = new URLSearchParams(window.location.search).get("social");
     if (socialResult?.endsWith("-connected")) setNotice("Account connected. Your scheduled posts can now publish automatically.");
     if (socialResult?.endsWith("-denied")) setNotice("Connection cancelled. Nothing was changed.");
-    void Promise.all([fetchProjects(100), fetchSocialConnections()]).then(([items, statuses]) => {
+    void Promise.all([fetchProjects(100), fetchSocialConnections(), fetchProviderCapabilities()]).then(([items, statuses, providerCapabilities]) => {
       const ready = items.filter((item) => item.downloadArtifactId && item.status === "completed");
       setProjects(ready);
       setProjectId(ready[0]?.id ?? "");
       setConnections(statuses);
-    }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Scheduling data could not load."));
+      setCapabilities(providerCapabilities);
+    }).catch(setError);
   }, []);
 
   useEffect(() => {
@@ -41,17 +44,17 @@ export function SchedulePage() {
 
   const adjustPost = async (postId: string, update: { publishAt?: string; caption?: string }) => {
     if (!schedule) return;
-    setError("");
+    setError(null);
     try {
       setSchedule(await updateScheduledPost(schedule.id, postId, update));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "That post could not be updated.");
+      setError(reason);
     }
   };
 
   const changeConnection = async (connection: SocialConnection) => {
     setConnectionBusy(connection.platform);
-    setError("");
+    setError(null);
     try {
       if (connection.connected) {
         await disconnectSocial(connection.platform);
@@ -62,24 +65,25 @@ export function SchedulePage() {
         window.location.assign(authorizationUrl);
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The social account could not be updated.");
+      setError(reason);
     } finally {
       setConnectionBusy(null);
     }
   };
 
   const toggle = (platform: Platform) => {
+    if (!capabilities.some((item) => item.platform === platform && item.canSchedule)) return;
     const next = platforms.includes(platform) ? platforms.filter((item) => item !== platform) : [...platforms, platform];
     if (next.length) setPlatforms(next);
   };
 
   const save = async () => {
     setBusy(true);
-    setError("");
+    setError(null);
     try {
       setSchedule(await saveSchedule({ projectId, platforms, intervalMinutes: interval, startAt: startAt || "now", caption }));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The schedule could not be saved.");
+      setError(reason);
     } finally {
       setBusy(false);
     }
@@ -88,7 +92,7 @@ export function SchedulePage() {
   const createMetadata = async () => {
     if (!projectId) return;
     setBusy(true);
-    setError("");
+    setError(null);
     try {
       const generated = await generateSocialMetadata(projectId);
       setMetadata(generated);
@@ -98,7 +102,7 @@ export function SchedulePage() {
           : `${generated.youtubeDescription}\n\n${generated.youtubeHashtags.join(" ")}`.trim(),
       );
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Social metadata could not be generated.");
+      setError(reason);
     } finally {
       setBusy(false);
     }
@@ -106,13 +110,13 @@ export function SchedulePage() {
 
   return <div className="schedule-page product-page">
     <header className="page-heading-row"><div><span className="eyebrow">Publishing</span><h1>Schedule your finished clips.</h1><p>Save a durable posting plan. Publishing unlocks only when official platform credentials are configured.</p></div></header>
-    {error && <div className="source-error-banner">{error}</div>}
+    {error !== null && <CustomerError error={error} fallback="Scheduling could not be completed." />}
     {notice && <div className="social-notice"><CheckCircle2 size={16} /> {notice}</div>}
     <div className="connection-cards">{connections.map((connection) => <article key={connection.platform} data-connected={connection.connected}>{connection.platform === "youtube" ? <Youtube /> : <Instagram />}<div><strong>{connection.label}</strong><span>{connection.detail}</span><small>{connection.connected ? "Encrypted credentials are stored on the server." : connection.configured ? "Official OAuth is ready." : connection.setupHint}</small></div><button disabled={!connection.configured || connectionBusy === connection.platform} onClick={() => void changeConnection(connection)}>{connectionBusy === connection.platform ? "Working…" : connection.connected ? "Disconnect" : connection.configured ? "Connect" : "Admin setup"}</button></article>)}</div>
     <div className="schedule-workspace">
       <section className="schedule-builder">
         <label><span>Finished project</span><select value={projectId} onChange={(event) => setProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
-        <div><span>Platforms</span><div className="platform-options"><button data-selected={platforms.includes("youtube")} onClick={() => toggle("youtube")}><Youtube size={16} /> YouTube</button><button data-selected={platforms.includes("instagram")} onClick={() => toggle("instagram")}><Instagram size={16} /> Instagram</button></div></div>
+        <div><span>Platforms</span><div className="platform-options"><button disabled={!capabilities.some((item) => item.platform === "youtube" && item.canSchedule)} data-selected={platforms.includes("youtube")} onClick={() => toggle("youtube")}><Youtube size={16} /> YouTube</button><button disabled={!capabilities.some((item) => item.platform === "instagram" && item.canSchedule)} data-selected={platforms.includes("instagram")} onClick={() => toggle("instagram")}><Instagram size={16} /> Instagram</button></div></div>
         <label><span>Start</span><input type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} /></label>
         <label><span>Interval</span><select value={interval} onChange={(event) => setInterval(Number(event.target.value))}><option value="360">Every 6 hours</option><option value="720">Every 12 hours</option><option value="1440">Daily</option><option value="2880">Every 2 days</option></select></label>
         <label><span>Caption template</span><textarea value={caption} onChange={(event) => setCaption(event.target.value)} /></label>
