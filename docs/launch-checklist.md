@@ -23,8 +23,8 @@ TypeScript, production build and credential/history/bundle scans pass. Mobile
 390px/412px and tablet 768px signup, launcher, deep link and session-refresh checks
 pass; captured screenshots were inspected. Real Safari remains unverified.
 
-The September 4 roadmap records credential rotation as incomplete. Current key
-rotation status must be confirmed by the owner before public launch. Do not infer
+The September 4 roadmap records credential rotation as incomplete. On 2026-09-09 the owner reported rotation was not completed or was uncertain.
+Pause importing `.env.render` until the required credentials are replaced. Do not infer
 that an authenticating key is safe or that a clean Git scan proves rotation.
 
 ## Existing deployment
@@ -106,7 +106,7 @@ Render reference: https://render.com/docs/redirects-rewrites
 2. Click your existing sign-in option and complete sign-in.
 3. Return to Codex and say “done”.
 
-### B. Import prepared server settings — pending
+### B. Import prepared server settings — PAUSED FOR CREDENTIAL ROTATION
 
 The root `.env.render` is an ignored, owner-readable file containing the existing
 server credentials plus exact production URLs. Never paste its contents into chat,
