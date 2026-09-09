@@ -18,7 +18,7 @@ Do not start payments, campaigns, AI Video, Recreate/Dissect, or new social prov
 
 ## Current release checks
 
-365 backend tests, 21 frontend tests, 4 Playwright scenarios pass. Ruff, ESLint,
+368 backend tests, 21 frontend tests, 4 Playwright scenarios pass. Ruff, ESLint,
 TypeScript, production build and credential/history/bundle scans pass. Mobile
 390px/412px and tablet 768px signup, launcher, deep link and session-refresh checks
 pass; captured screenshots were inspected. Real Safari remains unverified.
@@ -98,7 +98,37 @@ Render reference: https://render.com/docs/redirects-rewrites
 - [ ] Verify production tenant isolation with controlled accounts.
 - [ ] Verify production worker memory and restart recovery.
 
+## Additional release evidence
+
+- GitHub CI on `b4be132` passed all five jobs. The subsequent Supabase key-header
+  compatibility fix requires its own final CI run.
+- Docker with a 512 MiB hard memory limit and one CPU completed signup, a generated
+  1080p upload and a 15-second portrait render in 10.53 seconds. No OOM kills.
+  The memory ceiling was reached, so this tiny low-frame-rate fixture is not proof
+  of sufficient production capacity. Test representative footage on the host.
+- New `sb_secret_` keys are supported by the social background store via `apikey`;
+  user calls retain their public API key + user JWT/RLS boundary. Three regression
+  cases pass. Existing environment variable names remain compatible.
+
 ## JASHAN MUST DO
+
+### NEXT ACTION: sign in to Supabase for credential rotation
+
+1. Open https://supabase.com/dashboard/project/amywdqifpomydyumuzgo/settings/api-keys.
+2. Click your usual sign-in option, such as Continue with GitHub.
+3. Complete sign-in. Do not copy keys into chat.
+4. Return to Codex and say “done”.
+5. Codex will inspect the actual key-management screen before providing the exact
+   create, replace and disable-old-key steps. Creating a replacement alone does
+   not invalidate the old legacy service-role key.
+
+This step takes priority over importing the prepared Render file. Supabase and R2
+credentials must be replaced and superseded credentials invalidated before launch.
+Groq/NVIDIA can remain disabled until their replacements are ready. Do not replace
+the encryption key without handling existing encrypted social records.
+
+References: https://supabase.com/docs/guides/getting-started/api-keys and
+https://developers.cloudflare.com/r2/api/tokens/
 
 ### A. Sign in to Render — completed
 

@@ -387,11 +387,15 @@ class SupabaseSocialStore:
         token = access_token or self.service_key
         if not token:
             raise RuntimeError("A user access token or SUPABASE_SERVICE_ROLE_KEY is required.")
+        # New Supabase secret API keys are opaque, not user JWTs. Keep
+        # caller requests on the public key + user JWT so RLS still applies.
+        opaque_worker_key = token == self.service_key and token.startswith("sb_secret_")
         headers = {
-            "apikey": self.anon_key,
-            "Authorization": f"Bearer {token}",
+            "apikey": self.service_key if opaque_worker_key else self.anon_key,
             "Accept": "application/json",
         }
+        if not opaque_worker_key:
+            headers["Authorization"] = f"Bearer {token}"
         if prefer:
             headers["Prefer"] = prefer
         body = None

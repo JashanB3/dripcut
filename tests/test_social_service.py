@@ -375,3 +375,26 @@ def test_supabase_update_post_persists_publish_time_and_archive_metadata(monkeyp
     assert isinstance(metadata, dict)
     assert metadata["archive_name"] == "final-clips.zip"
     assert metadata["schedule_id"] == "schedule-1"
+
+
+@pytest.mark.parametrize("caller_token", ["", "user-session-jwt", "legacy-service-jwt"])
+def test_supabase_secret_api_key_does_not_replace_caller_identity(monkeypatch, caller_token) -> None:
+    import io
+
+    service_key = "sb_secret_" + "test-only-placeholder"
+    store = SupabaseSocialStore("https://example.supabase.co", "public-key", service_key)
+    observed = []
+
+    def respond(request, **kwargs):
+        observed.append(request)
+        return io.BytesIO(b"[]")
+
+    monkeypatch.setattr("dripcut.social.store.urlopen", respond)
+    store._request("GET", "/rest/v1/scheduled_posts", access_token=caller_token)
+    request = observed[0]
+    if caller_token:
+        assert request.get_header("Apikey") == "public-key"
+        assert request.get_header("Authorization") == f"Bearer {caller_token}"
+    else:
+        assert request.get_header("Apikey") == service_key
+        assert request.get_header("Authorization") is None
