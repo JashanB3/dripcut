@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { isLaunchRoute } from "../launch";
 import type { ProductRoute } from "../models";
 
 const validRoutes = new Set<ProductRoute>([
@@ -32,9 +33,10 @@ const routePaths: Record<ProductRoute, string> = {
 
 const readRoute = (): ProductRoute => {
   const pathname = window.location.pathname.replace(/^\/+|\/+$/g, "") as ProductRoute;
-  if (validRoutes.has(pathname)) return pathname;
+  if (pathname as string === "create") return "auto-clip";
+  if (validRoutes.has(pathname)) return isLaunchRoute(pathname) ? pathname : "home";
   const value = window.location.hash.replace(/^#\/?/, "") as ProductRoute;
-  return validRoutes.has(value) ? value : "home";
+  return validRoutes.has(value) && isLaunchRoute(value) ? value : "home";
 };
 
 export function useHashRoute() {
@@ -51,6 +53,7 @@ export function useHashRoute() {
   }, []);
 
   const navigate = (next: ProductRoute) => {
+    next = isLaunchRoute(next) ? next : "home";
     window.history.pushState({}, "", routePaths[next]);
     window.location.hash = "";
     setRoute(next);

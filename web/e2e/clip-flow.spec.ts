@@ -54,8 +54,8 @@ test.describe("creator clipping journey", () => {
     ]));
 
     await page.goto("/schedule");
-    await expect(page.getByRole("button", { name: "YouTube", exact: true })).toBeEnabled();
-    await expect(page.getByRole("button", { name: "Instagram", exact: true })).toBeEnabled();
+    await expect(page.getByRole("heading", { name: /What will you/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Schedule", exact: true })).toHaveCount(0);
 
     await page.goto("/logout");
     await expect(page).toHaveURL(/\/login$/);

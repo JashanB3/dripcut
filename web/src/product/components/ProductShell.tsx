@@ -1,12 +1,10 @@
 import {
-  CircleHelp,
   CalendarClock,
   Home,
   FolderKanban,
   LayoutTemplate,
   FilePenLine,
   Plus,
-  Search,
   ShieldCheck,
   Settings,
   Sparkles,
@@ -16,6 +14,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { isLaunchRoute, youtubePublishingBeta } from "../launch";
 import type { ProductRoute } from "../models";
 
 export type UtilityPanel = "settings" | "account" | null;
@@ -61,12 +60,12 @@ export function ProductShell({
           <span>dc</span>
           <strong>DripCut</strong>
         </button>
-        <button className="create-nav-button" onClick={onCreate}>
+        <button className="create-nav-button" aria-label="Create" onClick={onCreate}>
           <Plus size={21} strokeWidth={2.6} />
           <span>Create</span>
         </button>
         <nav className="product-nav__main" aria-label="Primary navigation">
-          {navigation.map(({ route: itemRoute, label, icon: Icon }) => (
+          {navigation.filter((item) => isLaunchRoute(item.route)).map(({ route: itemRoute, label, icon: Icon }) => (
             <button
               key={itemRoute}
               data-selected={route === itemRoute}
@@ -88,15 +87,8 @@ export function ProductShell({
       </aside>
       <section className="product-main">
         <header className="product-topbar">
-          <div className="product-search">
-            <Search size={17} />
-            <span>Search projects and tools</span>
-            <kbd>⌘K</kbd>
-          </div>
+          <div className="product-search"><span>Your private video studio</span></div>
           <div className="product-topbar__spacer" />
-          <button className="topbar-help" title="Help center is not connected yet" disabled>
-            <CircleHelp size={19} />
-          </button>
           <span className="local-pill">{user.name}</span>
           <button className="topbar-avatar" onClick={() => onUtilityPanel("account")} aria-label="Open account menu">{initial}</button>
         </header>
@@ -150,7 +142,7 @@ function UtilityDrawer({
         <p>{content.body}</p>
         {panel === "account" && (
           <div className="connection-list">
-            <div><CalendarClock size={18} /><span><strong>Publishing accounts</strong><small>View live YouTube and Instagram connection status.</small></span><button onClick={onOpenConnections}>Manage</button></div>
+            {youtubePublishingBeta && <div><CalendarClock size={18} /><span><strong>YouTube publishing beta</strong><small>Manage your connected YouTube account.</small></span><button onClick={onOpenConnections}>Manage</button></div>}
             <button className="secondary-action account-logout" onClick={onLogout}>Log out</button>
           </div>
         )}

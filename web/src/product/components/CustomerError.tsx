@@ -15,7 +15,7 @@ export function CustomerError({
   return (
     <div className="source-error-banner customer-error" role="alert">
       <AlertCircle size={18} aria-hidden="true" />
-      <span><strong>{failure.message}</strong>{failure.hint && <small>{failure.hint}</small>}</span>
+      <span><strong>{failure.message}</strong>{failure.hint && <small>{failure.hint}</small>}{error instanceof ApiError && error.requestId && <small>Reference: {error.requestId}</small>}</span>
       {onRetry && <button type="button" onClick={onRetry}><RefreshCw size={14} /> Try again</button>}
     </div>
   );
@@ -25,7 +25,7 @@ function normalizeCustomerError(error: unknown, fallback: string) {
   if (error instanceof ApiError) {
     return { message: error.message || fallback, hint: error.hint, retryable: error.retryable };
   }
-  if (error instanceof Error) return { message: error.message || fallback, hint: undefined, retryable: false };
+  if (error instanceof Error) return { message: fallback, hint: undefined, retryable: false };
   if (typeof error === "string" && error.trim()) return { message: error.trim(), hint: undefined, retryable: false };
   return { message: fallback, hint: undefined, retryable: false };
 }

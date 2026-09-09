@@ -147,7 +147,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
   return (
     <div className="auto-clip-page product-page">
       <header className="auto-clip-topline">
-        <div><span className="eyebrow"><Sparkles size={13} /> Auto Clip & Schedule</span><h1>One source. A whole content plan.</h1>{state.templateId && <small className="active-template-note">Template preset applied</small>}</div>
+        <div><span className="eyebrow"><Sparkles size={13} /> Auto Clip</span><h1>One source. A whole content plan.</h1>{state.templateId && <small className="active-template-note">Template preset applied</small>}</div>
         <div className="workflow-steps">
           {["Source", "Clips", "Finish"].map((step, index) => <span key={step} data-active={currentStep === index} data-complete={currentStep > index}><i>{currentStep > index ? <Check size={12} /> : index + 1}</i>{step}</span>)}
         </div>

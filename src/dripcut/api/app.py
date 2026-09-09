@@ -184,6 +184,7 @@ def _request_headers(
 ) -> dict[str, str]:
     result = dict(headers or {})
     result["x-request-id"] = getattr(request.state, "request_id", "unknown")
+    result["cache-control"] = "private, no-store"
     return result
 
 
@@ -388,7 +389,7 @@ def create_app(
                     ),
                 )
         response = await call_next(request)
-        response.headers["x-request-id"] = request.state.request_id
+        response.headers.update(_request_headers(request))
         logger.info(
             "api_request request_id=%s method=%s path=%s status=%s duration_ms=%s user_id=%s workspace_id=%s",
             request.state.request_id,

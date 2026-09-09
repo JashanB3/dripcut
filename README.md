@@ -6,6 +6,10 @@ strong moments, render captions and portrait video, download a ZIP, and schedule
 
 Standard sequential clipping is the default and never requires AI.
 
+Current launch status and deployment actions: [launch checklist](docs/launch-checklist.md).
+Experimental tools and publishing are hidden by default; this README also describes
+preserved provider foundations that are not yet verified live.
+
 ## Product Flow
 
 ```text

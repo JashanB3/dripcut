@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+import { experimentalTools, isLaunchRoute } from "../launch";
 import { workflows } from "../mock/data";
 import type { ProductRoute, WorkflowDefinition } from "../models";
 
@@ -40,7 +41,8 @@ export function CreateModal({ open, onClose, onNavigate }: {
   if (!open) return null;
 
   const normalized = query.trim().toLowerCase();
-  const visible = workflows.filter((workflow, index) => {
+  const launchWorkflows = workflows.filter((workflow) => workflow.status === "available" && isLaunchRoute(workflow.route));
+  const visible = launchWorkflows.filter((workflow, index) => {
     if (normalized) return `${workflow.title} ${workflow.description}`.toLowerCase().includes(normalized);
     if (category === "For You") return index < 5;
     return workflow.category === category;
@@ -54,7 +56,7 @@ export function CreateModal({ open, onClose, onNavigate }: {
           <span className="eyebrow">Create</span>
           <h2 id="create-modal-title">Start something</h2>
           <nav aria-label="Creation categories">
-            {categories.map((item) => (
+            {categories.filter((item) => item === "For You" || launchWorkflows.some((workflow) => workflow.category === item)).map((item) => (
               <button key={item} data-selected={!normalized && category === item} onClick={() => { setCategory(item); setQuery(""); }}>{item}</button>
             ))}
           </nav>
@@ -98,7 +100,7 @@ function WorkflowCard({ workflow, onNavigate }: { workflow: WorkflowDefinition; 
         <button disabled={!available} onClick={() => available && onNavigate(workflow.route!)}>
           {available ? "Start" : "In development"}
         </button>
-        {workflow.scriptPlatform && <button className="workflow-card__script" onClick={openScript}>AI Script</button>}
+        {experimentalTools && workflow.scriptPlatform && <button className="workflow-card__script" onClick={openScript}>AI Script</button>}
       </div>
     </article>
   );

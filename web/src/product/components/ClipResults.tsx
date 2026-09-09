@@ -1,6 +1,7 @@
 import { CalendarClock, CheckSquare2, Download, Square } from "lucide-react";
 import { useState } from "react";
 
+import { youtubePublishingBeta } from "../launch";
 import type { ApiJob } from "../models";
 
 const formatBytes = (bytes: number) => {
@@ -28,7 +29,7 @@ export function ClipResults({ job, onBack, onSchedule }: { job: ApiJob; onBack: 
     <section className="clip-results-page">
       <header className="results-header">
         <div><span className="preview-badge">Render complete · {job.elapsed.toFixed(1)} seconds</span><h1>Your clips are ready.</h1><p>Preview each result, download individual clips, or take the complete ZIP.</p></div>
-        <div className="results-header__actions"><button className="secondary-action" onClick={onBack}>Edit clip plan</button>{onSchedule && <button className="secondary-action" onClick={onSchedule}><CalendarClock size={16} /> Schedule</button>}{job.zipArtifact && <a className="primary-action" href={job.zipArtifact.downloadUrl} download><Download size={17} /> Download ZIP</a>}</div>
+        <div className="results-header__actions"><button className="secondary-action" onClick={onBack}>Edit clip plan</button>{youtubePublishingBeta && onSchedule && <button className="secondary-action" onClick={onSchedule}><CalendarClock size={16} /> Schedule</button>}{job.zipArtifact && <a className="primary-action" href={job.zipArtifact.downloadUrl} download><Download size={17} /> Download ZIP</a>}</div>
       </header>
       <div className="results-selection-bar">
         <button onClick={() => setSelected(allSelected ? [] : clips.map((item) => item.id))}>{allSelected ? <CheckSquare2 size={17} /> : <Square size={17} />} Select all</button>

@@ -10,7 +10,7 @@ export function SchedulePage() {
   const [projectId, setProjectId] = useState("");
   const [connections, setConnections] = useState<SocialConnection[]>([]);
   const [capabilities, setCapabilities] = useState<ProviderCapabilities[]>([]);
-  const [platforms, setPlatforms] = useState<Platform[]>(["youtube", "instagram"]);
+  const [platforms, setPlatforms] = useState<Platform[]>(["youtube"]);
   const [interval, setInterval] = useState(1440);
   const [startAt, setStartAt] = useState("");
   const [caption, setCaption] = useState("{clip} #shorts #reels");
@@ -29,7 +29,7 @@ export function SchedulePage() {
       const ready = items.filter((item) => item.downloadArtifactId && item.status === "completed");
       setProjects(ready);
       setProjectId(ready[0]?.id ?? "");
-      setConnections(statuses);
+      setConnections(statuses.filter((item) => item.platform === "youtube"));
       setCapabilities(providerCapabilities);
     }).catch(setError);
   }, []);
@@ -109,14 +109,14 @@ export function SchedulePage() {
   };
 
   return <div className="schedule-page product-page">
-    <header className="page-heading-row"><div><span className="eyebrow">Publishing</span><h1>Schedule your finished clips.</h1><p>Save a durable posting plan. Publishing unlocks only when official platform credentials are configured.</p></div></header>
+    <header className="page-heading-row"><div><span className="eyebrow">Publishing</span><h1>YouTube publishing beta</h1><p>Save a durable posting plan. Publishing unlocks only when official platform credentials are configured.</p></div></header>
     {error !== null && <CustomerError error={error} fallback="Scheduling could not be completed." />}
     {notice && <div className="social-notice"><CheckCircle2 size={16} /> {notice}</div>}
     <div className="connection-cards">{connections.map((connection) => <article key={connection.platform} data-connected={connection.connected}>{connection.platform === "youtube" ? <Youtube /> : <Instagram />}<div><strong>{connection.label}</strong><span>{connection.detail}</span><small>{connection.connected ? "Encrypted credentials are stored on the server." : connection.configured ? "Official OAuth is ready." : connection.setupHint}</small></div><button disabled={!connection.configured || connectionBusy === connection.platform} onClick={() => void changeConnection(connection)}>{connectionBusy === connection.platform ? "Working…" : connection.connected ? "Disconnect" : connection.configured ? "Connect" : "Admin setup"}</button></article>)}</div>
     <div className="schedule-workspace">
       <section className="schedule-builder">
         <label><span>Finished project</span><select value={projectId} onChange={(event) => setProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
-        <div><span>Platforms</span><div className="platform-options"><button disabled={!capabilities.some((item) => item.platform === "youtube" && item.canSchedule)} data-selected={platforms.includes("youtube")} onClick={() => toggle("youtube")}><Youtube size={16} /> YouTube</button><button disabled={!capabilities.some((item) => item.platform === "instagram" && item.canSchedule)} data-selected={platforms.includes("instagram")} onClick={() => toggle("instagram")}><Instagram size={16} /> Instagram</button></div></div>
+        <div><span>Platforms</span><div className="platform-options"><button disabled={!capabilities.some((item) => item.platform === "youtube" && item.canSchedule)} data-selected={platforms.includes("youtube")} onClick={() => toggle("youtube")}><Youtube size={16} /> YouTube</button><span>Instagram publishing coming soon</span></div></div>
         <label><span>Start</span><input type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} /></label>
         <label><span>Interval</span><select value={interval} onChange={(event) => setInterval(Number(event.target.value))}><option value="360">Every 6 hours</option><option value="720">Every 12 hours</option><option value="1440">Daily</option><option value="2880">Every 2 days</option></select></label>
         <label><span>Caption template</span><textarea value={caption} onChange={(event) => setCaption(event.target.value)} /></label>

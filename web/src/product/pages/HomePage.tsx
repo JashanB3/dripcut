@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { CustomerError } from "../components/CustomerError";
+import { isLaunchRoute, youtubePublishingBeta } from "../launch";
 import { apiUrl, fetchLatestSchedule, fetchProjects, fetchUsage } from "../api/client";
 import type { ApiProject, ProductRoute, SavedSchedule, UsageSummary } from "../models";
 
@@ -43,13 +45,15 @@ export function HomePage({ onCreate, onNavigate }: {
   onNavigate: (route: ProductRoute) => void;
 }) {
   const [projects, setProjects] = useState<ApiProject[]>([]);
+  const [projectsError, setProjectsError] = useState<unknown>(null);
   const [projectsBusy, setProjectsBusy] = useState(true);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [schedule, setSchedule] = useState<SavedSchedule | null>(null);
 
   useEffect(() => {
-    void Promise.allSettled([fetchProjects(8), fetchUsage(), fetchLatestSchedule()])
+    void Promise.allSettled([fetchProjects(8), fetchUsage(), youtubePublishingBeta ? fetchLatestSchedule() : Promise.resolve(null)])
       .then(([projectResult, usageResult, scheduleResult]) => {
+        if (projectResult.status === "rejected") setProjectsError(projectResult.reason);
         setProjects(projectResult.status === "fulfilled" ? projectResult.value : []);
         setUsage(usageResult.status === "fulfilled" ? usageResult.value : null);
         setSchedule(scheduleResult.status === "fulfilled" ? scheduleResult.value : null);
@@ -69,6 +73,7 @@ export function HomePage({ onCreate, onNavigate }: {
 
   return (
     <div className="home-page product-page">
+      {projectsError !== null && <CustomerError error={projectsError} fallback="We couldn’t load your projects. Refresh to try again." />}
       <section className="home-hero">
         <span className="hero-orbit hero-orbit--one" />
         <span className="hero-orbit hero-orbit--two" />
@@ -78,11 +83,11 @@ export function HomePage({ onCreate, onNavigate }: {
           <p>Turn long videos into scroll-stopping content.</p>
         </div>
         <button className="hero-create-field" onClick={onCreate}>
-          <span><Plus size={20} /> Start with a video or an idea</span>
+          <span><Plus size={20} /> Upload a video or paste a YouTube link</span>
           <strong>Create</strong>
         </button>
         <div className="quick-actions" aria-label="Quick actions">
-          {quickActions.map(([label, Icon, route]) => (
+          {quickActions.filter((item) => isLaunchRoute(item[2])).map(([label, Icon, route]) => (
             <button key={label} disabled={!route} onClick={() => route && onNavigate(route)} title={!route ? "This workflow is not connected yet" : undefined}>
               <span><Icon size={19} /></span>
               {label}
@@ -93,14 +98,14 @@ export function HomePage({ onCreate, onNavigate }: {
 
       <section className="workspace-pulse" aria-label="Workspace overview">
         <article><span><Download size={17} /></span><div><small>Recent exports</small><strong>{downloadable.length ? `${downloadable.length} ready` : "No ZIP yet"}</strong><em>{downloadable[0]?.title ?? "Your latest renders appear here"}</em></div>{downloadable[0]?.downloadArtifactId && <a href={apiUrl(`/api/artifacts/${downloadable[0].downloadArtifactId}/download`)} download>Download</a>}</article>
-        <article><span><Radio size={17} /></span><div><small>Scheduled content</small><strong>{scheduledPosts.length ? `${scheduledPosts.length} upcoming` : "Nothing queued"}</strong><em>{nextPost ? `${nextPost.platform} · ${new Date(nextPost.publishAt).toLocaleString()}` : "Connect a platform when you are ready"}</em></div><button onClick={() => onNavigate("schedule")}>Open</button></article>
+        {youtubePublishingBeta && <article><span><Radio size={17} /></span><div><small>Scheduled content</small><strong>{scheduledPosts.length ? `${scheduledPosts.length} upcoming` : "Nothing queued"}</strong><em>{nextPost ? `${nextPost.platform} · ${new Date(nextPost.publishAt).toLocaleString()}` : "Connect a platform when you are ready"}</em></div><button onClick={() => onNavigate("schedule")}>Open</button></article>}
         <article><span><Film size={17} /></span><div><small>{usage?.planLabel ?? "Usage"}</small><strong>{processing ? `${processing.used.toFixed(1)} / ${processing.limit ?? "∞"} min` : "Usage ready"}</strong><em>{processing ? `Resets ${new Date(usage!.resetAt).toLocaleDateString()}` : "View processing and AI allowances"}</em></div><button onClick={() => onNavigate("usage")}>View</button></article>
       </section>
 
       <section className="auto-clip-feature">
         <div className="auto-clip-feature__copy">
           <span className="magic-badge"><Sparkles size={14} /> DripCut Magic</span>
-          <h2>Paste a link. Turn it into Shorts & Reels. Schedule everything.</h2>
+          <h2>One video. Ready-to-share Shorts & Reels.</h2>
           <p>Upload a long video, choose a duration and get a clear clip plan. AI moment discovery stays optional.</p>
           <div className="feature-actions">
             <button className="primary-action" onClick={() => onNavigate("auto-clip")}>Start auto clipping <ArrowRight size={17} /></button>
@@ -147,7 +152,7 @@ export function HomePage({ onCreate, onNavigate }: {
       <section className="content-section quick-tools-section">
         <div className="section-heading"><div><span className="eyebrow">Quick tools</span><h2>One job. Zero maze.</h2></div></div>
         <div className="quick-tool-grid">
-          {quickTools.map(([title, body, Icon, accent, route], index) => (
+          {quickTools.filter((item) => isLaunchRoute(item[4])).map(([title, body, Icon, accent, route], index) => (
             <button
               key={title}
               className={`quick-tool quick-tool--${accent} ${index === 0 ? "quick-tool--wide" : ""}`}

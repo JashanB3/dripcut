@@ -1,4 +1,7 @@
-# DripCut — Project State
+# DripCut — Historical Project State
+
+This July snapshot is historical. For the current launch state use
+[docs/launch-checklist.md](docs/launch-checklist.md).
 
 **Version:** 1.0.0rc1 (release candidate)
 **Checkpoint date:** 2026-07-27 (session 5)

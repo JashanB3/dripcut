@@ -8,7 +8,7 @@ hosting platform's encrypted secret manager.
 
 | Variable | Required | Secret | Purpose |
 |---|---:|---:|---|
-| `VITE_API_BASE_URL` | Yes in production | No | Public HTTPS URL of the DripCut API |
+| `VITE_API_BASE_URL` | Empty with the Render proxy | No | Same-origin `/api`; use a separate URL only with a compatible cookie/domain deployment |
 
 The frontend must not receive Supabase service-role, R2/S3, Groq, NVIDIA, Google client-secret,
 Meta app-secret, OAuth-state, encryption, cookie, or database credentials.
@@ -64,3 +64,8 @@ unless the browser needs them.
 Do not pass secrets as Docker build arguments. Runtime environment injection prevents credentials
 from being stored in image layers. Limit secret-manager access to the API and worker service
 identities, and require review for secret changes.
+
+## Current launch deployment
+
+See [launch-checklist.md](launch-checklist.md) for the existing Render service IDs,
+verified routing rules, public URLs, release evidence and remaining manual actions.

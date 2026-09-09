@@ -49,8 +49,8 @@ export const exampleProjects: ProjectSummary[] = [
 export const workflows: WorkflowDefinition[] = [
   {
     id: "auto-clip",
-    title: "Auto Clip & Schedule",
-    description: "Turn one long video into a ready-to-publish content plan.",
+    title: "Create Clips",
+    description: "Upload a video or paste a YouTube link, then create clips to download.",
     category: "For You",
     route: "auto-clip",
     status: "available",

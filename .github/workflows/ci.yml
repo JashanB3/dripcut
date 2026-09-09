@@ -3,7 +3,7 @@ name: DripCut CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "launch/**"]
 
 permissions:
   contents: read

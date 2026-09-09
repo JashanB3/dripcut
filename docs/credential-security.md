@@ -18,7 +18,8 @@ source control, or a frontend bundle must be revoked and replaced rather than me
 | OAuth state secret | API only | Never | DripCut operator |
 | Credential encryption key | API and social workers | Never | DripCut operator |
 
-`VITE_API_BASE_URL` is the only DripCut-specific frontend environment variable. Never create a
+`VITE_API_BASE_URL`, `VITE_EXPERIMENTAL_TOOLS`, and
+`VITE_YOUTUBE_PUBLISHING_BETA` are public frontend configuration. Never create a
 `VITE_` variable containing `SECRET`, `TOKEN`, `PASSWORD`, `PRIVATE`, `SERVICE_ROLE`, or
 `API_KEY`. Vite substitutes `VITE_` values into browser code at build time.
 

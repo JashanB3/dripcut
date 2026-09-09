@@ -829,3 +829,13 @@ def test_unexpected_errors_return_safe_json(container, monkeypatch) -> None:
     assert response.json()["error"]["retryable"] is True
     assert "private implementation detail" not in response.text
     assert response.json()["error"]["request_id"] == response.headers["x-request-id"]
+
+
+def test_api_responses_are_never_shared_cached(container) -> None:
+    """A static-host API proxy must not cache tenant data or auth failures."""
+    app = create_app(build_service(container), require_auth=True)
+    with TestClient(app) as client:
+        for path in ("/api/health", "/api/projects"):
+            response = client.get(path)
+            assert response.headers["cache-control"] == "private, no-store"
+            assert response.headers["x-request-id"]
