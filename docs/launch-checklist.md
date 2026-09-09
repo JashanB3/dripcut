@@ -91,7 +91,7 @@ Render reference: https://render.com/docs/redirects-rewrites
   4/2/1/1 complete clips. Nine actual HTTP render submissions in batches of 1/3/5
   all succeeded; observed queue peaks 0/1/3. This is local hardware evidence only.
 - [x] Docker build, startup, health 200, FFmpeg/FFprobe, non-root UID 10001.
-- [ ] Final GitHub CI for release commit.
+- [x] Final GitHub CI for release commit `0efae48`: all five jobs passed.
 - [ ] Deploy both services to the release commit after secrets are saved.
 - [ ] Verify live Supabase signup/login, refresh and persistence in clean browser.
 - [ ] Verify production upload/import, captions, render and download.
@@ -100,8 +100,8 @@ Render reference: https://render.com/docs/redirects-rewrites
 
 ## Additional release evidence
 
-- GitHub CI on `b4be132` passed all five jobs. The subsequent Supabase key-header
-  compatibility fix requires its own final CI run.
+- GitHub CI on `0efae48`, including the Supabase key-header compatibility fix,
+  passed all five jobs: https://github.com/JashanB3/dripcut/actions/runs/34303439288.
 - Docker with a 512 MiB hard memory limit and one CPU completed signup, a generated
   1080p upload and a 15-second portrait render in 10.53 seconds. No OOM kills.
   The memory ceiling was reached, so this tiny low-frame-rate fixture is not proof
@@ -112,15 +112,16 @@ Render reference: https://render.com/docs/redirects-rewrites
 
 ## JASHAN MUST DO
 
-### NEXT ACTION: sign in to Supabase for credential rotation
+### NEXT ACTION: replace R2 storage credentials
 
-1. Open https://supabase.com/dashboard/project/amywdqifpomydyumuzgo/settings/api-keys.
-2. Click your usual sign-in option, such as Continue with GitHub.
-3. Complete sign-in. Do not copy keys into chat.
-4. Return to Codex and say “done”.
-5. Codex will inspect the actual key-management screen before providing the exact
-   create, replace and disable-old-key steps. Creating a replacement alone does
-   not invalidate the old legacy service-role key.
+- Supabase replacement `dripcut_production_20260909` is saved locally and staged
+  privately in `.env.render`; both files have owner-only permissions.
+- Owner disabled legacy API keys. Dashboard now offers **Re-enable JWT-based
+  API keys**, confirming they are disabled.
+- After deactivation, replacement backend REST and publishable-key auth-settings
+  probes both returned HTTP 200. No secret values were displayed.
+- R2 storage credentials still need replacement and old-token revocation before
+  importing the deployment environment. Bucket: `dripcut-production`.
 
 This step takes priority over importing the prepared Render file. Supabase and R2
 credentials must be replaced and superseded credentials invalidated before launch.
