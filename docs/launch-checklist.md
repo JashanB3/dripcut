@@ -1,6 +1,6 @@
 # DripCut launch checklist
 
-Updated 2026-09-09. This launch checkpoint supersedes the feature-expansion roadmap.
+Updated 2026-09-12. This launch checkpoint supersedes the feature-expansion roadmap.
 Do not start payments, campaigns, AI Video, Recreate/Dissect, or new social providers.
 
 ## Recovered baseline
@@ -112,7 +112,7 @@ Render reference: https://render.com/docs/redirects-rewrites
 
 ## JASHAN MUST DO
 
-### NEXT ACTION: replace R2 storage credentials
+### NEXT ACTION: sign in to NVIDIA for optional Viral Moments credential replacement
 
 - Supabase replacement `dripcut_production_20260909` is saved locally and staged
   privately in `.env.render`; both files have owner-only permissions.
@@ -120,8 +120,19 @@ Render reference: https://render.com/docs/redirects-rewrites
   API keys**, confirming they are disabled.
 - After deactivation, replacement backend REST and publishable-key auth-settings
   probes both returned HTTP 200. No secret values were displayed.
-- R2 storage credentials still need replacement and old-token revocation before
-  importing the deployment environment. Bucket: `dripcut-production`.
+- Owner created an R2 replacement user token scoped to Object Read & Write on
+  `dripcut-production` and saved both S3 credential values locally. List, write,
+  and read checks passed; the unique temporary verification object was removed.
+- Superseded `R2 User Token` was deleted; dashboard lists only the replacement.
+- Initial saved credentials were rejected after old-token deletion. Owner rolled
+  the remaining token and saved its regenerated S3 credentials on September 12.
+  Fresh list/write/read/delete verification now passes. Verified values were
+  staged privately in `.env.render`; the verification object was removed.
+- Owner created and saved the Groq replacement `dripcut_production_20260912`.
+  Authentication returned HTTP 200 and real sample transcription produced four
+  segments. Verified key staged privately in `.env.render`. Old `Dripcut` key
+  (August 24) is absent after owner revocation; replacement still returns HTTP 200.
+- NVIDIA replacement is next; publishing remains deferred.
 
 This step takes priority over importing the prepared Render file. Supabase and R2
 credentials must be replaced and superseded credentials invalidated before launch.
