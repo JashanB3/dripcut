@@ -24,7 +24,9 @@ TypeScript, production build and credential/history/bundle scans pass. Mobile
 pass; captured screenshots were inspected. Real Safari remains unverified.
 
 The September 4 roadmap records credential rotation as incomplete. On 2026-09-09 the owner reported rotation was not completed or was uncertain.
-Pause importing `.env.render` until the required credentials are replaced. Do not infer
+Required Supabase, R2, Groq and NVIDIA replacements are now verified and staged.
+All 28 backend setting names are now persisted on Render. A subsequent screenshot
+exposed the replacement Supabase secret, which must be replaced again before launch. Do not infer
 that an authenticating key is safe or that a clean Git scan proves rotation.
 
 ## Existing deployment
@@ -112,7 +114,7 @@ Render reference: https://render.com/docs/redirects-rewrites
 
 ## JASHAN MUST DO
 
-### NEXT ACTION: sign in to NVIDIA for optional Viral Moments credential replacement
+### NEXT ACTION: replace Supabase key exposed in September 12 screenshot
 
 - Supabase replacement `dripcut_production_20260909` is saved locally and staged
   privately in `.env.render`; both files have owner-only permissions.
@@ -132,12 +134,15 @@ Render reference: https://render.com/docs/redirects-rewrites
   Authentication returned HTTP 200 and real sample transcription produced four
   segments. Verified key staged privately in `.env.render`. Old `Dripcut` key
   (August 24) is absent after owner revocation; replacement still returns HTTP 200.
-- NVIDIA replacement is next; publishing remains deferred.
+- NVIDIA replacement `dripcut_production_20260912` passed a real, schema-valid
+  Viral Moments request with the configured model. Its displayed suffix matches
+  the saved local key. Verified credential staged privately in `.env.render`.
+  Old `Dripcut` key is absent after owner deletion; replacement inference returns
+  HTTP 200. Publishing is deferred.
 
-This step takes priority over importing the prepared Render file. Supabase and R2
-credentials must be replaced and superseded credentials invalidated before launch.
-Groq/NVIDIA can remain disabled until their replacements are ready. Do not replace
-the encryption key without handling existing encrypted social records.
+Required provider rotation is complete; import the prepared backend-only Render
+file next. Do not replace the encryption key without handling existing encrypted
+social records. Publishing remains unconfigured for this release.
 
 References: https://supabase.com/docs/guides/getting-started/api-keys and
 https://developers.cloudflare.com/r2/api/tokens/
@@ -148,7 +153,7 @@ https://developers.cloudflare.com/r2/api/tokens/
 2. Click your existing sign-in option and complete sign-in.
 3. Return to Codex and say “done”.
 
-### B. Import prepared server settings — PAUSED FOR CREDENTIAL ROTATION
+### B. Import prepared server settings — READY FOR OWNER IMPORT
 
 The root `.env.render` is an ignored, owner-readable file containing the existing
 server credentials plus exact production URLs. Never paste its contents into chat,
@@ -160,8 +165,10 @@ commit it, or upload it to the frontend service.
 4. Press Command+Shift+G; enter `/Users/jashan/Documents/DripCut/dripcut/.env.render`.
 5. Press Return, click Open, then Add variables. Replace duplicate keys with the
    prepared values if prompted.
-6. Leave the form open without deploying; return to Codex and say “done”.
-7. Codex will verify key names only, save the configuration, and deploy the release.
+6. After Add variables, use the arrow beside the save button and choose Save only.
+7. Keep the backend page open and return to Codex saying “done”. Codex will verify
+   persisted key names and deploy the release. On September 12 the first import
+   did not persist (API still had three settings); frontend had only VITE_API_BASE_URL.
 
 ### C. Supabase callback settings — after deployment targets are verified
 
@@ -184,3 +191,18 @@ scheduled video ID are required before claiming YouTube publishing works.
 NOT READY TO LAUNCH until the production journey and release CI are verified.
 Local green tests alone are insufficient. Optional AI failures must not block standard
 clipping. Payments and Instagram are not launch gates.
+
+## September 12 deployment checkpoint
+
+- All 28 expected backend setting names are persisted, with no duplicates observed.
+- User-triggered API deployment of `main` commit `9abbca8` failed with
+  `Expected 3 parts in JWT; got 1` during social worker recovery. This matches the
+  already-fixed opaque Supabase key header bug in launch commit `0efae48`.
+- Re-ran `tests/test_social_service.py`: 14 tests passed.
+- API Render branch is now `launch/production-ready`; Auto-Deploy was set Off
+  to control release timing. No launch-branch deployment has been started.
+- Frontend was independently redeployed to `9abbca8` on main; it still needs the
+  launch release and same-origin API configuration verification.
+- Screenshot exposed `dripcut_production_20260909` Supabase secret. Do not launch
+  using it. Fresh key form prepared as `dripcut_production_20260912`; owner must
+  create/save it locally and on Render, then revoke the screenshot-exposed key.
