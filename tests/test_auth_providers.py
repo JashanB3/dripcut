@@ -106,3 +106,20 @@ def test_supabase_is_selected_when_credentials_are_configured(tmp_path, monkeypa
     provider = build_auth_provider(tmp_path)
 
     assert isinstance(provider, SupabaseAuthProvider)
+
+
+def test_signup_uses_configured_frontend_callback(monkeypatch) -> None:
+    monkeypatch.setenv("DRIPCUT_FRONTEND_URL", "https://dripcut.onrender.com/")
+    provider = SupabaseAuthProvider("https://example.supabase.co", "anon-key")
+    captured = {}
+
+    def request(method, path, payload):
+        captured.update(method=method, path=path)
+        return {"id": "test-user", "email": payload["email"]}
+
+    monkeypatch.setattr(provider, "_request", request)
+    result = provider.signup(name="Test", email="test@example.test", password="test-password")
+    assert result.requires_email_confirmation
+    assert parse_qs(urlparse(captured["path"]).query) == {
+        "redirect_to": ["https://dripcut.onrender.com/auth/callback"]
+    }

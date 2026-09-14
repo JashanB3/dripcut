@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { ApiError, requestJson } from "../product/api/client";
 import { CustomerError } from "../product/components/CustomerError";
@@ -11,7 +11,7 @@ const copy = {
   signup: ["Create your account", "Start clipping in under a minute."],
   "forgot-password": ["Reset your password", "We will send a secure recovery link."],
   "reset-password": ["Choose a new password", "Use at least eight characters."],
-  callback: ["Connecting your account", "Finishing the secure Google login."],
+  callback: ["Confirming your account", "Finishing your secure DripCut sign-in."],
   logout: ["Signing you out", "Closing this DripCut session."],
 } satisfies Record<AuthPageKind, [string, string]>;
 
@@ -24,17 +24,27 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState<unknown>(null);
+  const callbackStarted = useRef(false);
 
   useEffect(() => {
     if (kind === "logout") {
       void logout().finally(() => navigatePath("/login", true));
     }
     if (kind === "callback") {
+      if (callbackStarted.current) return;
+      callbackStarted.current = true;
       const values = new URLSearchParams(window.location.hash.replace(/^#/, "") || window.location.search);
+      window.history.replaceState(null, "", window.location.pathname);
+      if (values.has("error")) {
+        setError(values.get("error_code") === "otp_expired"
+          ? "This confirmation link has expired or was already used. Try logging in if you already confirmed your email. Otherwise, sign up again to request a fresh link."
+          : "We could not confirm this sign-in. Please return to login and try again.");
+        return;
+      }
       const accessToken = values.get("access_token");
       const refreshToken = values.get("refresh_token");
       if (!accessToken || !refreshToken) {
-        setError("Google did not return a valid session. Please try again.");
+        setError("This sign-in link is incomplete. Please return to login and try again.");
         return;
       }
       void exchangeOAuthTokens(accessToken, refreshToken)
@@ -102,7 +112,7 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
       </section>
       <section className="auth-card" aria-live="polite">
         <h2>{title}</h2><p>{subtitle}</p>
-        {isPassive ? <div className="auth-loader" /> : (
+        {isPassive ? (error === null ? <div className="auth-loader" /> : null) : (
           <form onSubmit={submit}>
             {(kind === "login" || kind === "signup") && <button type="button" className="oauth-button" onClick={() => void googleAuthorize().catch(setError)}>Continue with Google</button>}
             {(kind === "login" || kind === "signup") && <div className="auth-divider"><span>or use your email</span></div>}
@@ -115,6 +125,10 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
         )}
         {message && <div className="auth-message auth-message--success">{message}</div>}
         {error !== null && <CustomerError error={error} fallback="Unable to continue." />}
+        {kind === "callback" && error !== null && <>
+          <button className="auth-submit" onClick={() => navigatePath("/login", true)}>Return to login</button>
+          <button className="auth-switch" onClick={() => navigatePath("/signup", true)}>Request a new confirmation link</button>
+        </>}
         {!isPassive && <button className="auth-switch" onClick={() => navigatePath(kind === "login" ? "/signup" : "/login")}>{kind === "login" ? "New to DripCut? Create an account" : "Already have an account? Log in"}</button>}
       </section>
     </div>

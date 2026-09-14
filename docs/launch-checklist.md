@@ -206,3 +206,22 @@ clipping. Payments and Instagram are not launch gates.
 - Screenshot exposed `dripcut_production_20260909` Supabase secret. Do not launch
   using it. Fresh key form prepared as `dripcut_production_20260912`; owner must
   create/save it locally and on Render, then revoke the screenshot-exposed key.
+
+## September 15 signup repair
+
+- Supabase Site URL was still `http://127.0.0.1:5173`; confirmation mail consequently
+  returned users to an unavailable local server. Changed the default auth destination
+  to `https://dripcut.onrender.com/auth/callback` and added that exact URL plus
+  `https://dripcut.onrender.com/reset-password` to the allowlist. Saved state verified.
+- Signup adapter now explicitly supplies the configured frontend callback. Callback
+  page handles expired/used links with recovery navigation, uses provider-neutral
+  language, and removes tokens/errors from the address bar before exchanging them.
+- Auth provider tests: 7 passed; Ruff, frontend lint/typecheck and the new expired-link
+  Playwright scenario passed. These source changes still require deployment.
+- Supabase Emails UI explicitly says custom SMTP is required to edit subject/body.
+  Default sender remains active. Owner reports no email domain/sending service.
+  Prepared branded HTML in `docs/email-templates/`; not yet installed in Supabase.
+- Do not disable email confirmation to bypass delivery limits. Configure a verified
+  sending domain and custom SMTP; test a fresh email, since old links may be used/expired.
+- Owner reports replacement Supabase key saved on Render. Screenshot-exposed
+  September 9 key revocation remains unverified; finish this before release.

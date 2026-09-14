@@ -25,3 +25,13 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 412, height: 915 }
     await expect(page.getByRole("heading", { name: "Start with one long video." })).toBeVisible();
   });
 }
+
+test("expired confirmation links show recovery and remove URL credentials", async ({ page }) => {
+  await page.goto("/auth/callback#error=access_denied&error_code=otp_expired&error_description=untrusted-provider-text&access_token=discard-me");
+  await expect(page.getByText(/This confirmation link has expired or was already used/)).toBeVisible();
+  await expect(page).toHaveURL(/\/auth\/callback$/);
+  await expect(page.getByText("untrusted-provider-text")).toHaveCount(0);
+  await expect(page.locator(".auth-card .auth-loader")).toHaveCount(0);
+  await page.getByRole("button", { name: "Return to login" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+});

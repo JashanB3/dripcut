@@ -29,9 +29,13 @@ class SupabaseAuthProvider:
         return cls(url, key)
 
     def signup(self, *, name: str, email: str, password: str) -> AuthResult:
+        frontend = os.environ.get("DRIPCUT_FRONTEND_URL", "").strip().rstrip("/")
+        path = "/auth/v1/signup"
+        if frontend:
+            path += "?" + urlencode({"redirect_to": f"{frontend}/auth/callback"})
         data = self._request(
             "POST",
-            "/auth/v1/signup",
+            path,
             {"email": email.strip().lower(), "password": password, "data": {"name": name.strip()}},
         )
         return self._result(data)
