@@ -221,7 +221,19 @@ clipping. Payments and Instagram are not launch gates.
 - Supabase Emails UI explicitly says custom SMTP is required to edit subject/body.
   Default sender remains active. Owner reports no email domain/sending service.
   Prepared branded HTML in `docs/email-templates/`; not yet installed in Supabase.
-- Do not disable email confirmation to bypass delivery limits. Configure a verified
-  sending domain and custom SMTP; test a fresh email, since old links may be used/expired.
+- For the current early-access launch, email confirmation is deliberately disabled in
+  Supabase. New email/password users can reach their workspace immediately, so the
+  default Supabase delivery limits and generic template cannot block sign-up. Re-enable
+  confirmation before broad public marketing after configuring a verified sending domain
+  and custom SMTP; then test with a fresh email, since old links may be used or expired.
 - Owner reports replacement Supabase key saved on Render. Screenshot-exposed
   September 9 key revocation remains unverified; finish this before release.
+
+## September 15 production deployment
+
+- Render backend and frontend were both deployed from `launch/production-ready` at
+  commit `2408fe7`. GitHub Actions completed successfully for that commit.
+- Render health endpoint returned `{"status":"ok","ffmpeg":true,"ffprobe":true}` and
+  the public frontend returned HTTP 200.
+- Browser QA created a synthetic email/password account and reached `/home` directly;
+  no confirmation email, local redirect, or expired-link error was involved.
