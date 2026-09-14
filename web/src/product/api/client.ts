@@ -222,12 +222,9 @@ const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefin
 
 export function apiUrl(path: string): string {
   if (configuredApiBase) return `${configuredApiBase}${path}`;
-  if (import.meta.env.DEV || typeof window === "undefined") return path;
-  throw new ApiError(
-    "The DripCut processing server is not configured.",
-    "Set VITE_API_BASE_URL to the public backend URL before building the frontend.",
-    "API_BASE_URL_MISSING",
-  );
+  // Render rewrites same-origin /api requests to the backend. This keeps the
+  // HttpOnly login cookie on the customer-facing DripCut origin.
+  return path;
 }
 
 const resolveApiUrl = (value?: string): string | undefined => {
