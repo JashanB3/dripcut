@@ -237,3 +237,16 @@ clipping. Payments and Instagram are not launch gates.
   the public frontend returned HTTP 200.
 - Browser QA created a synthetic email/password account and reached `/home` directly;
   no confirmation email, local redirect, or expired-link error was involved.
+
+## September 15 same-origin session repair
+
+- A browser session could reach the application shell but protected project requests
+  were rejected as anonymous. The static-site build had a direct API base URL, so
+  browser cookies were issued for the API host rather than the DripCut host.
+- Render's existing `/api/*` rewrite already proxies requests to the API. The frontend
+  now always uses that same-origin route at `dripcut.onrender.com`, preserving the
+  HttpOnly session cookie. Deployed frontend commit `adb0012` passed lint, TypeScript,
+  and production build checks.
+- Browser QA logged into the synthetic account after the deployment and verified that
+  projects and usage loaded successfully. Existing users must log out and log in once
+  to receive a cookie on the corrected host.
