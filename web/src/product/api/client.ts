@@ -221,9 +221,13 @@ interface ErrorPayload {
 const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim().replace(/\/$/, "");
 
 export function apiUrl(path: string): string {
+  if (typeof window !== "undefined" && window.location.hostname === "dripcut.onrender.com") {
+    // The static site proxies /api to the backend. Never send browser session
+    // traffic to the backend host directly because its HttpOnly cookie is not
+    // available to the application origin.
+    return path;
+  }
   if (configuredApiBase) return `${configuredApiBase}${path}`;
-  // Render rewrites same-origin /api requests to the backend. This keeps the
-  // HttpOnly login cookie on the customer-facing DripCut origin.
   return path;
 }
 
