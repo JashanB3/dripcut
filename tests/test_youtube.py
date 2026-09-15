@@ -301,13 +301,13 @@ def test_strategy_order_includes_configured_pot_and_cookie_fallback(paths, monke
     strategies = service.select_strategy()
 
     assert [strategy.name for strategy in strategies] == [
-        "web_embedded",
         "mweb_pot",
+        "web_embedded",
         "web_safari_hls",
         "recommended",
         "authenticated_cookie",
     ]
-    pot_options = service._options(strategies[1], "job", paths.temp / "pot", None)
+    pot_options = service._options(strategies[0], "job", paths.temp / "pot", None)
     cookie_options = service._options(strategies[-1], "job", paths.temp / "cookie", None)
     assert pot_options["extractor_args"] == {
         "youtube": {"player_client": ["mweb"]},
@@ -482,3 +482,35 @@ def test_all_public_strategies_fail_with_region_aware_upload_fallback(paths, mon
         "web_safari_hls",
         "recommended",
     )
+
+
+def test_script_mode_is_preferred_when_bundled(paths, monkeypatch) -> None:
+    script_home = paths.temp / "bgutil" / "server"
+    (script_home / "build").mkdir(parents=True)
+    (script_home / "build" / "generate_once.js").write_text("// test", encoding="utf-8")
+    monkeypatch.delenv("DRIPCUT_YOUTUBE_POT_PROVIDER_URL", raising=False)
+    monkeypatch.setenv("DRIPCUT_YOUTUBE_BGUTIL_SCRIPT_HOME", str(script_home))
+    monkeypatch.setattr(
+        "dripcut.services.youtube_service._distribution_version",
+        lambda name: "2.0.0" if name == "bgutil-ytdlp-pot-provider" else "test",
+    )
+
+    service = YouTubeService(paths, sleep=lambda _seconds: None)
+    strategy = service.select_strategy()[0]
+
+    assert strategy.name == "mweb_pot"
+    assert strategy.pot_provider_mode == "script"
+    assert service.diagnostics().po_token_provider_mode == "script"
+    assert service._options(strategy, "job", paths.temp / "pot", None)["extractor_args"] == {
+        "youtube": {"player_client": ["mweb"]},
+        "youtubepot-bgutilscript": {"server_home": [str(script_home)]},
+    }
+
+
+def test_bgutil_can_be_disabled_without_changing_other_fallbacks(paths, monkeypatch) -> None:
+    monkeypatch.setenv("DRIPCUT_YOUTUBE_ENABLE_BGUTIL", "false")
+    service = YouTubeService(paths, sleep=lambda _seconds: None)
+
+    assert [strategy.name for strategy in service.select_strategy()] == [
+        "web_embedded", "web_safari_hls", "recommended"
+    ]

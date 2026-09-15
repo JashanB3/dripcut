@@ -86,11 +86,16 @@ network strategy changes.
 
 #### ₹0 launch profile
 
-Do **not** deploy the optional PoT provider during the zero-cost launch phase.
-Leave `DRIPCUT_YOUTUBE_POT_PROVIDER_URL` unset on the API service. DripCut then
-uses its existing `web_embedded`, `web_safari_hls`, and `recommended` yt-dlp
-strategies, while local upload remains the reliable fallback for a challenged
-public video.
+Do **not** deploy an external PoT provider during the zero-cost launch phase.
+The production image bundles the pinned bgutil 2.0.0 on-demand script and uses
+it locally for the `mweb` strategy. Leave `DRIPCUT_YOUTUBE_POT_PROVIDER_URL`
+unset: no provider listener or additional Render service is required.
+
+Set `DRIPCUT_YOUTUBE_ENABLE_BGUTIL=false` to immediately fall back to the
+existing `web_embedded`, `web_safari_hls`, and `recommended` yt-dlp strategies.
+`DRIPCUT_YOUTUBE_BGUTIL_SCRIPT_HOME` is available only for an operator-built
+image that stores the script somewhere other than `/opt/dripcut/bgutil/server`.
+Local upload remains the fallback for a challenged public video.
 
 There is no recommended zero-cost hosting arrangement for this provider that
 keeps it private from the public internet:

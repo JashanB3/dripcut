@@ -54,6 +54,7 @@ _STRATEGY_LABELS = {
     "recommended": "recommended client",
     "authenticated_cookie": "cookies",
 }
+_BGUTIL_SCRIPT_HOME = Path("/opt/dripcut/bgutil/server")
 
 YouTubeErrorCode = Literal[
     "PUBLIC_EXTRACTION_BLOCKED",
@@ -101,6 +102,7 @@ class YouTubeDiagnostics:
     js_challenge_support_active: bool
     po_token_provider_available: bool
     po_token_provider_configured: bool
+    po_token_provider_mode: str | None
     cookie_fallback_configured: bool
     proxy_configured: bool
     strategies: tuple[str, ...]
@@ -120,6 +122,7 @@ class _ExtractionStrategy:
     player_client: str | None = None
     use_hls: bool = False
     use_pot_provider: bool = False
+    pot_provider_mode: Literal["http", "script"] | None = None
     use_cookies: bool = False
 
 
@@ -409,7 +412,8 @@ class YouTubeImportService:
             ejs_version=ejs_version,
             js_challenge_support_active=bool(runtime and ejs_version),
             po_token_provider_available=_distribution_version("bgutil-ytdlp-pot-provider") is not None,
-            po_token_provider_configured=bool(os.environ.get("DRIPCUT_YOUTUBE_POT_PROVIDER_URL")),
+            po_token_provider_configured=self._pot_provider_mode() is not None,
+            po_token_provider_mode=self._pot_provider_mode(),
             cookie_fallback_configured=cookie_file is not None,
             proxy_configured=bool(os.environ.get("DRIPCUT_YOUTUBE_PROXY")),
             strategies=strategies,
@@ -421,13 +425,19 @@ class YouTubeImportService:
         )
 
     def select_strategy(self) -> list[_ExtractionStrategy]:
-        strategies = [_ExtractionStrategy("web_embedded", player_client="web_embedded")]
-        provider_url = os.environ.get("DRIPCUT_YOUTUBE_POT_PROVIDER_URL")
+        strategies: list[_ExtractionStrategy] = []
         provider_available = _distribution_version("bgutil-ytdlp-pot-provider") is not None
-        if provider_url and provider_available:
+        provider_mode = self._pot_provider_mode()
+        if provider_available and provider_mode:
             strategies.append(
-                _ExtractionStrategy("mweb_pot", player_client="mweb", use_pot_provider=True)
+                _ExtractionStrategy(
+                    "mweb_pot",
+                    player_client="mweb",
+                    use_pot_provider=True,
+                    pot_provider_mode=provider_mode,
+                )
             )
+        strategies.append(_ExtractionStrategy("web_embedded", player_client="web_embedded"))
         strategies.append(
             _ExtractionStrategy("web_safari_hls", player_client="web_safari", use_hls=True)
         )
@@ -435,6 +445,23 @@ class YouTubeImportService:
         if self._cookie_file() is not None:
             strategies.append(_ExtractionStrategy("authenticated_cookie", use_cookies=True))
         return strategies
+
+    @staticmethod
+    def _pot_provider_mode() -> Literal["http", "script"] | None:
+        """Choose a local bgutil script before an explicitly configured HTTP provider."""
+        enabled = os.environ.get("DRIPCUT_YOUTUBE_ENABLE_BGUTIL", "true").strip().lower()
+        if enabled in {"0", "false", "no", "off"}:
+            return None
+        if os.environ.get("DRIPCUT_YOUTUBE_POT_PROVIDER_URL"):
+            return "http"
+        script_home = Path(
+            os.environ.get("DRIPCUT_YOUTUBE_BGUTIL_SCRIPT_HOME", str(_BGUTIL_SCRIPT_HOME))
+        )
+        return "script" if (script_home / "build" / "generate_once.js").is_file() else None
+
+    @staticmethod
+    def _bgutil_script_home() -> Path:
+        return Path(os.environ.get("DRIPCUT_YOUTUBE_BGUTIL_SCRIPT_HOME", str(_BGUTIL_SCRIPT_HOME)))
 
     def _record_attempt(self, strategy: _ExtractionStrategy) -> None:
         with self._state_lock:
@@ -455,7 +482,7 @@ class YouTubeImportService:
             self._state.last_failure_class = normalized.code
             self._state.last_http_status = status
             self._state.last_login_required = login_required
-        pot_configured = bool(os.environ.get("DRIPCUT_YOUTUBE_POT_PROVIDER_URL")) and (
+        pot_configured = self._pot_provider_mode() is not None and (
             _distribution_version("bgutil-ytdlp-pot-provider") is not None
         )
         cookie_configured = self._cookie_file() is not None
@@ -743,10 +770,14 @@ class YouTubeImportService:
         extractor_args: dict[str, dict[str, list[str]]] = {}
         if strategy.player_client:
             extractor_args["youtube"] = {"player_client": [strategy.player_client]}
-        if strategy.use_pot_provider:
+        if strategy.use_pot_provider and strategy.pot_provider_mode == "http":
             provider_url = os.environ.get("DRIPCUT_YOUTUBE_POT_PROVIDER_URL")
             if provider_url:
                 extractor_args["youtubepot-bgutilhttp"] = {"base_url": [provider_url]}
+        if strategy.use_pot_provider and strategy.pot_provider_mode == "script":
+            extractor_args["youtubepot-bgutilscript"] = {
+                "server_home": [str(self._bgutil_script_home())]
+            }
         if extractor_args:
             options["extractor_args"] = extractor_args
         if strategy.use_cookies and (cookie_file := self._cookie_file()):

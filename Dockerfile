@@ -2,6 +2,19 @@
 
 FROM node:22-bookworm-slim AS node-runtime
 
+ARG BGUTIL_VERSION=2.0.0
+
+# Build the documented on-demand bgutil provider once at image build time.  The
+# runtime invokes its script locally; it never opens a public listening port.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates git \
+    && git clone --depth 1 --branch "${BGUTIL_VERSION}" \
+        https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /opt/dripcut/bgutil \
+    && cd /opt/dripcut/bgutil/server \
+    && npm ci \
+    && npx tsc \
+    && rm -rf /var/lib/apt/lists/*
+
 FROM python:3.12-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -30,6 +43,7 @@ RUN apt-get update \
 
 # yt-dlp EJS requires Node 22+, but not npm or frontend dependencies at runtime.
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /opt/dripcut/bgutil/server /opt/dripcut/bgutil/server
 
 WORKDIR /app
 
