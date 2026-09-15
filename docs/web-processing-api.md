@@ -84,6 +84,29 @@ network strategy changes.
 
 ### Render production configuration
 
+#### ₹0 launch profile
+
+Do **not** deploy the optional PoT provider during the zero-cost launch phase.
+Leave `DRIPCUT_YOUTUBE_POT_PROVIDER_URL` unset on the API service. DripCut then
+uses its existing `web_embedded`, `web_safari_hls`, and `recommended` yt-dlp
+strategies, while local upload remains the reliable fallback for a challenged
+public video.
+
+There is no recommended zero-cost hosting arrangement for this provider that
+keeps it private from the public internet:
+
+- Render Private Services have no free compute plan.
+- A separate Render Free Web Service is public, may sleep after inactivity, and
+  cannot receive Render private-network traffic.
+- Oracle Always Free and free demo-hosting platforms can run a small service, but
+  the Render API would have to reach it through a public endpoint. The bgutil
+  provider is not an authenticated customer-facing API, so this is not an
+  acceptable launch configuration.
+
+Revisit the private-service configuration below only after launch revenue
+supports a paid internal service. No product route, job behavior, storage, or
+editor behavior changes when the variable remains unset.
+
 Create a Render **Private Service** named `dripcut-youtube-pot` from the pinned
 container image `brainicism/bgutil-ytdlp-pot-provider:2.0.0`. The provider listens
 on port `4416`; do not expose it publicly. Place it in the same Render region and
