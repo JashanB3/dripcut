@@ -42,6 +42,18 @@ _MP4_FORMAT = (
 _HLS_FORMAT = "b[protocol^=m3u8][height<=1080]/b[height<=1080]/best[height<=1080]/best"
 _URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
 _HTTP_STATUS_PATTERN = re.compile(r"(?:HTTP(?: Error)?|status(?: code)?)\D{0,12}(\d{3})", re.IGNORECASE)
+_SENSITIVE_DETAIL_PATTERN = re.compile(
+    r"\b(?:access[_-]?token|refresh[_-]?token|authorization|cookie|po[_-]?token|"
+    r"token|secret|password)\b\s*(?:=|:)\s*(?:Bearer\s+)?[^\s,;|]+",
+    re.IGNORECASE,
+)
+_STRATEGY_LABELS = {
+    "web_embedded": "embedded web",
+    "mweb_pot": "mweb + PoT",
+    "web_safari_hls": "Safari HLS",
+    "recommended": "recommended client",
+    "authenticated_cookie": "cookies",
+}
 
 YouTubeErrorCode = Literal[
     "PUBLIC_EXTRACTION_BLOCKED",
@@ -195,7 +207,12 @@ def _node_available() -> bool:
 def _safe_detail(error: Exception | str) -> str:
     detail = str(error).strip()
     detail = _URL_PATTERN.sub("<redacted-url>", detail)
+    detail = _SENSITIVE_DETAIL_PATTERN.sub("<redacted-secret>", detail)
     return detail[:1200]
+
+
+def _strategy_label(strategy: str) -> str:
+    return _STRATEGY_LABELS.get(strategy, strategy)
 
 
 def _error_chain_detail(error: Exception | str) -> str:
@@ -472,6 +489,7 @@ class YouTubeImportService:
         if on_progress:
             on_progress(0.02, "Fetching video information")
         last_error: YouTubeImportError | None = None
+        last_detail = ""
         with self._state_lock:
             self._state.last_attempted_strategies = ()
         for strategy in self.select_strategy():
@@ -489,12 +507,14 @@ class YouTubeImportService:
             except Exception as error:  # noqa: BLE001 - normalize yt-dlp failures
                 normalized = error if isinstance(error, YouTubeImportError) else _normalize_error(error)
                 last_error = normalized
+                last_detail = _error_chain_detail(error)
                 self._record_failure(strategy, error, normalized)
                 _log.warning(
-                    "youtube import=%s video=%s metadata strategy=%s failed=%s detail=%s",
+                    "youtube import=%s video=%s metadata strategy=%s (%s) failed=%s detail=%s",
                     resolved_import_id,
                     self.video_id(value),
                     strategy.name,
+                    _strategy_label(strategy.name),
                     normalized.code,
                     _safe_detail(_error_chain_detail(error)),
                 )
@@ -505,6 +525,13 @@ class YouTubeImportService:
                     "GEO_RESTRICTED",
                 }:
                     raise normalized from error
+        self._log_exhausted_failure(
+            import_id=resolved_import_id,
+            video_id=self.video_id(value),
+            phase="metadata",
+            error=last_error,
+            detail=last_detail,
+        )
         if last_error and last_error.code == "PUBLIC_EXTRACTION_BLOCKED":
             raise self._regional_public_error()
         raise last_error or YouTubeImportError("DOWNLOAD_FAILED", "YouTube metadata could not be retrieved.")
@@ -523,6 +550,7 @@ class YouTubeImportService:
         destination = ensure_dir(self.paths.temp / "youtube" / f"{int(time.time())}-{import_id}")
         strategies = self.select_strategy()
         last_error: YouTubeImportError | None = None
+        last_detail = ""
         download_started = time.monotonic()
 
         for attempt, strategy in enumerate(strategies, start=1):
@@ -553,10 +581,11 @@ class YouTubeImportService:
                 elapsed = time.monotonic() - started
                 self._record_success(strategy)
                 _log.info(
-                    "youtube import=%s video=%s strategy=%s format=%s yt-dlp=%s retries=%d elapsed=%.2fs success",
+                    "youtube import=%s video=%s strategy=%s (%s) format=%s yt-dlp=%s retries=%d elapsed=%.2fs success",
                     import_id,
                     metadata.video_id,
                     strategy.name,
+                    _strategy_label(strategy.name),
                     format_id,
                     _distribution_version("yt-dlp") or "unknown",
                     attempt - 1,
@@ -578,12 +607,14 @@ class YouTubeImportService:
             except Exception as error:  # noqa: BLE001 - normalize yt-dlp failures
                 normalized = error if isinstance(error, YouTubeImportError) else _normalize_error(error)
                 last_error = normalized
+                last_detail = _error_chain_detail(error)
                 self._record_failure(strategy, error, normalized)
                 _log.warning(
-                    "youtube import=%s video=%s strategy=%s yt-dlp=%s retry=%d failed=%s detail=%s",
+                    "youtube import=%s video=%s strategy=%s (%s) yt-dlp=%s retry=%d failed=%s detail=%s",
                     import_id,
                     metadata.video_id,
                     strategy.name,
+                    _strategy_label(strategy.name),
                     _distribution_version("yt-dlp") or "unknown",
                     attempt - 1,
                     normalized.code,
@@ -599,9 +630,38 @@ class YouTubeImportService:
                 if attempt < len(strategies):
                     self._sleep(min(0.75 * attempt, 2.0))
 
+        self._log_exhausted_failure(
+            import_id=import_id,
+            video_id=metadata.video_id,
+            phase="download",
+            error=last_error,
+            detail=last_detail,
+        )
         if last_error and last_error.code == "PUBLIC_EXTRACTION_BLOCKED":
             raise self._regional_public_error()
         raise last_error or YouTubeImportError("DOWNLOAD_FAILED", "The YouTube import failed.")
+
+    def _log_exhausted_failure(
+        self,
+        *,
+        import_id: str,
+        video_id: str,
+        phase: str,
+        error: YouTubeImportError | None,
+        detail: str,
+    ) -> None:
+        """Record the final normalized extractor result without exposing credentials."""
+        if error is None:
+            return
+        _log.error(
+            "youtube import=%s video=%s phase=%s exhausted strategies=%s final_code=%s final_reason=%s",
+            import_id,
+            video_id,
+            phase,
+            ",".join(self._state.last_attempted_strategies) or "none",
+            error.code,
+            _safe_detail(detail or error),
+        )
 
     @staticmethod
     def _regional_public_error() -> YouTubeImportError:

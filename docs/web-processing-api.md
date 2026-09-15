@@ -85,9 +85,18 @@ network strategy changes.
 ### Render production configuration
 
 Create a Render **Private Service** named `dripcut-youtube-pot` from the pinned
-container image `brainicism/bgutil-ytdlp-pot-provider:1.3.2`. The provider listens
+container image `brainicism/bgutil-ytdlp-pot-provider:2.0.0`. The provider listens
 on port `4416`; do not expose it publicly. Place it in the same Render region and
 workspace/private network as the DripCut API.
+
+Use Render's **Existing Image** source. It has no build command and no start command:
+the image starts its own HTTP provider on port `4416`. Do not assign a public URL.
+Copy the private-network URL shown by Render, including `:4416`, into the API
+variable below. Version 2 is required because it contains the provider's current
+security fixes; do not deploy the old `1.3.2` image.
+The API enables `mweb_pot` only when that variable is non-empty and the installed
+`bgutil-ytdlp-pot-provider` package is available; it passes the URL only to yt-dlp's
+`youtubepot-bgutilhttp` extractor argument.
 
 Configure the DripCut **Web Service** with:
 

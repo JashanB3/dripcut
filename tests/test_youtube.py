@@ -12,6 +12,7 @@ from dripcut.services.youtube_service import (
     YouTubeImportService,
     YouTubeService,
     _download_error,
+    _safe_detail,
 )
 
 
@@ -293,7 +294,7 @@ def test_strategy_order_includes_configured_pot_and_cookie_fallback(paths, monke
     monkeypatch.setenv("DRIPCUT_YOUTUBE_COOKIE_FILE", str(cookie_file))
     monkeypatch.setattr(
         "dripcut.services.youtube_service._distribution_version",
-        lambda name: "1.3.2" if name == "bgutil-ytdlp-pot-provider" else "test",
+        lambda name: "2.0.0" if name == "bgutil-ytdlp-pot-provider" else "test",
     )
 
     service = YouTubeService(paths, sleep=lambda _seconds: None)
@@ -313,6 +314,67 @@ def test_strategy_order_includes_configured_pot_and_cookie_fallback(paths, monke
         "youtubepot-bgutilhttp": {"base_url": ["http://127.0.0.1:4416"]},
     }
     assert cookie_options["cookiefile"] == str(cookie_file)
+
+
+def test_import_uses_mweb_pot_when_provider_is_configured(paths, monkeypatch) -> None:
+    options_seen: list[dict[str, object]] = []
+
+    class ProviderError(RuntimeError):
+        pass
+
+    class FakeYoutubeDL:
+        def __init__(self, options):
+            self.options = options
+            options_seen.append(options)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def extract_info(self, _url, *, download):
+            client = self.options.get("extractor_args", {}).get("youtube", {}).get(
+                "player_client", ["recommended"]
+            )[0]
+            if download and client == "web_embedded":
+                raise ProviderError("HTTP Error 403: confirm you're not a bot")
+            if download:
+                _write_fake_output(self.options)
+            return _metadata()
+
+    _install_fake_ytdlp(monkeypatch, FakeYoutubeDL, ProviderError)
+    monkeypatch.setenv("DRIPCUT_YOUTUBE_POT_PROVIDER_URL", "http://pot.internal:4416")
+    monkeypatch.setattr(YouTubeImportService, "_validate_media", staticmethod(lambda _path: None))
+    monkeypatch.setattr(
+        "dripcut.services.youtube_service._distribution_version",
+        lambda name: "2.0.0" if name == "bgutil-ytdlp-pot-provider" else "test",
+    )
+
+    result = YouTubeService(paths, sleep=lambda _seconds: None).import_video("https://youtu.be/abc123")
+
+    assert result.strategy == "mweb_pot"
+    pot_options = next(
+        options
+        for options in options_seen
+        if options.get("extractor_args", {}).get("youtube", {}).get("player_client") == ["mweb"]
+    )
+    assert pot_options["extractor_args"] == {
+        "youtube": {"player_client": ["mweb"]},
+        "youtubepot-bgutilhttp": {"base_url": ["http://pot.internal:4416"]},
+    }
+
+
+def test_safe_detail_redacts_urls_and_secret_values() -> None:
+    detail = _safe_detail(
+        "HTTP Error 403 for https://example.test/watch?token=visible "
+        "po_token=also-visible authorization: Bearer third-visible"
+    )
+
+    assert "example.test" not in detail
+    assert "visible" not in detail
+    assert "<redacted-url>" in detail
+    assert detail.count("<redacted-secret>") == 2
 
 
 def test_render_secret_cookie_alias_is_supported(paths, monkeypatch) -> None:
