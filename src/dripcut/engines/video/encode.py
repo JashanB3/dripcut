@@ -143,7 +143,11 @@ class EncodeSettings:
 
     def resolved_preset(self) -> str:
         """Explicit encoder preset if set, otherwise the quality preset."""
-        return self.preset or self.quality.preset
+        # Production can trade compression efficiency for render latency without
+        # changing the user-facing quality selection.  This is useful on CPU-only
+        # workers where the default medium preset makes long clip batches feel
+        # stalled.  An explicit per-job preset still wins.
+        return self.preset or os.environ.get("DRIPCUT_FFMPEG_PRESET") or self.quality.preset
 
     def build_args(self, *, video_encoder: str, has_audio: bool, has_video: bool = True) -> list[str]:
         """Build the output-side FFmpeg arguments.
