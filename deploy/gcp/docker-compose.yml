@@ -20,7 +20,9 @@ services:
     restart: unless-stopped
     init: true
     mem_limit: 3g
-    cpus: 1.75
+    # The production VM has four vCPUs.  Leave capacity for the OS/Caddy while
+    # allowing FFmpeg to use the processor the instance was upgraded for.
+    cpus: 3.5
     pids_limit: 256
     security_opt:
       - no-new-privileges:true
