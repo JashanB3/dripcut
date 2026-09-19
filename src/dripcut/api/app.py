@@ -73,7 +73,12 @@ from dripcut.api.contracts import (
     YouTubeImportRequest,
 )
 from dripcut.api.service import WebClipService
-from dripcut.api.stores import LocalArtifactStore, LocalSourceAssetStore, QueueJobStore
+from dripcut.api.stores import (
+    LocalArtifactStore,
+    LocalSourceAssetStore,
+    ObjectJobStateStore,
+    QueueJobStore,
+)
 from dripcut.auth.models import AuthProviderError, AuthResult
 from dripcut.auth.provider import AuthProvider, build_auth_provider
 from dripcut.content.models import (
@@ -90,6 +95,7 @@ from dripcut.core.bootstrap import build_container
 from dripcut.core.container import ServiceContainer
 from dripcut.core.errors import DripCutError
 from dripcut.engines.ai.provider import ScriptBrief, ScriptRewriteAction
+from dripcut.engines.export.queue import LocalJobQueue
 from dripcut.observability.metrics import summarize_pipeline_jobs
 from dripcut.security.rate_limit import InMemoryRateLimiter
 from dripcut.services.script_service import ScriptStudioService, ScriptWorkspace
@@ -214,12 +220,20 @@ def build_service(container: ServiceContainer | None = None) -> WebClipService:
     root = resolved.paths.projects / "web"
     storage = build_storage_provider(root / "objects")
     resolved.social.storage = storage
+    resolved.projects.configure_storage(storage)
+    web_queue = LocalJobQueue(
+        resolved.events,
+        max_workers=resolved.settings.video.max_workers,
+        history_file=resolved.paths.history_file,
+        state_store=ObjectJobStateStore(storage, resolved.paths.history_file),
+        progress_persist_interval=2.0,
+    )
     max_upload_bytes = int(resolved.settings.server.max_upload_mb) * 1024 * 1024
     return WebClipService(
         resolved,
         LocalSourceAssetStore(root, storage, max_bytes=max_upload_bytes),
         LocalArtifactStore(root, storage),
-        QueueJobStore(resolved.resolve("queue")),
+        QueueJobStore(web_queue),
     )
 
 
@@ -1086,11 +1100,7 @@ def create_app(
         principal: Principal = principal_dependency,
     ) -> list[ProjectResponse]:
         allowed = tenants.project_ids(principal)
-        projects = [
-            project
-            for project in clip_service.list_projects(limit=200)
-            if project.id in allowed
-        ]
+        projects = clip_service.list_projects(limit=200, project_ids=allowed)
         return projects[:limit] if limit else projects
 
     @app.get("/api/projects/{project_id}", response_model=ProjectDetailResponse)

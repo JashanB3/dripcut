@@ -9,7 +9,10 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from dripcut.api.app import build_service, create_app
-from dripcut.api.stores import LocalArtifactStore, LocalSourceAssetStore
+from dripcut.api.stores import LocalArtifactStore, LocalSourceAssetStore, ObjectJobStateStore
+from dripcut.core.events import EventBus
+from dripcut.engines.export.queue import LocalJobQueue
+from dripcut.models.job import Job, JobKind, JobResult, JobStatus
 from dripcut.storage.local import LocalStorageProvider
 from dripcut.storage.s3 import S3StorageProvider
 
@@ -75,6 +78,35 @@ def test_local_stores_recover_metadata_on_a_fresh_server(tmp_path: Path) -> None
     assert restored_clip.job_id == "fresh-job"
     assert Path(restored_clip.path).read_bytes() == b"fresh-clip"
     assert [item.id for item in fresh_artifacts.list_for_job("fresh-job")] == [clip.id]
+
+
+def test_job_state_restores_from_object_storage_after_fresh_process(tmp_path: Path) -> None:
+    provider = LocalStorageProvider(tmp_path / "objects")
+    first_cache = tmp_path / "first" / "history.json"
+    first = LocalJobQueue(
+        EventBus(),
+        state_store=ObjectJobStateStore(provider, first_cache),
+    )
+    try:
+        submitted = first.submit(
+            Job(kind=JobKind.TRIM, title="durable", run=lambda _job: JobResult())
+        )
+        assert first.wait(timeout=10)
+        assert submitted.status is JobStatus.SUCCEEDED
+    finally:
+        first.shutdown()
+
+    shutil.rmtree(first_cache.parent)
+    second = LocalJobQueue(
+        EventBus(),
+        state_store=ObjectJobStateStore(provider, tmp_path / "second" / "history.json"),
+    )
+    try:
+        restored = second.get(submitted.id)
+        assert restored is not None
+        assert restored.status is JobStatus.SUCCEEDED
+    finally:
+        second.shutdown()
 
 
 def test_s3_provider_uses_private_uploads_and_signed_downloads(tmp_path: Path) -> None:

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 
 import pytest
 
 from dripcut.core.errors import ProjectError
+from dripcut.storage.local import LocalStorageProvider
 from tests.conftest import needs_ffmpeg
 
 
@@ -48,6 +50,19 @@ def test_list_honours_a_limit(container) -> None:
     for index in range(5):
         container.projects.save(container.projects.create(f"Project {index}"))
     assert len(container.projects.list_projects(limit=2)) == 2
+
+
+def test_projects_restore_from_object_storage_after_fresh_process(container, paths) -> None:
+    storage = LocalStorageProvider(paths.home / "durable-objects")
+    container.projects.configure_storage(storage)
+    project = container.projects.create("Durable project")
+    shutil.rmtree(paths.projects)
+
+    restored = container.projects.load(project.id)
+    listed = container.projects.list_projects(project_ids={project.id})
+
+    assert restored.name == "Durable project"
+    assert [item.id for item in listed] == [project.id]
 
 
 def test_rename_keeps_the_id(container) -> None:

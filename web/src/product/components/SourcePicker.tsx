@@ -1,12 +1,13 @@
-import { FileVideo2, Link2, LoaderCircle, Upload, Youtube } from "lucide-react";
+import { AlertTriangle, FileVideo2, Link2, LoaderCircle, RotateCcw, Upload, Youtube } from "lucide-react";
 import { useRef, useState } from "react";
 
-export function SourcePicker({ onFile, onYouTube, busy, progress, stage }: {
+export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtubeFailed }: {
   onFile: (file: File) => void;
   onYouTube: (url: string, rightsConfirmed: boolean) => void;
   busy: "upload" | "youtube" | null;
   progress: number;
   stage: string;
+  youtubeFailed: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
@@ -72,6 +73,21 @@ export function SourcePicker({ onFile, onYouTube, busy, progress, stage }: {
           </button>
         </div>
       </div>
+      {youtubeFailed && (
+        <div className="youtube-recovery" role="status">
+          <AlertTriangle size={20} />
+          <span>
+            <strong>Keep going with this project</strong>
+            <small>Retry the public link, or upload a copy you are allowed to use. Your selected template and clip settings stay in place.</small>
+          </span>
+          <button disabled={busy !== null || !url.trim() || !rightsConfirmed} onClick={submitUrl}>
+            <RotateCcw size={15} /> Retry YouTube
+          </button>
+          <button className="youtube-recovery__upload" disabled={busy !== null} onClick={() => input.current?.click()}>
+            <Upload size={15} /> Upload video instead
+          </button>
+        </div>
+      )}
       <input
         ref={input}
         className="dc-visually-hidden"

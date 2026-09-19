@@ -95,6 +95,13 @@ def test_encode_settings_every_quality(quality: Quality) -> None:
     assert isinstance(quality.crf, int)
 
 
+def test_production_software_encoder_limits_threads(monkeypatch) -> None:
+    monkeypatch.setenv("DRIPCUT_ENV", "production")
+    monkeypatch.delenv("DRIPCUT_FFMPEG_THREADS", raising=False)
+    args = EncodeSettings().build_args(video_encoder="libx264", has_audio=True)
+    assert args[args.index("-threads") + 1] == "1"
+
+
 def test_videotoolbox_uses_quality_not_crf() -> None:
     args = EncodeSettings().build_args(video_encoder="h264_videotoolbox", has_audio=False)
     assert "-crf" not in args, "VideoToolbox takes -q:v, not -crf"

@@ -248,11 +248,14 @@ def test_web_safari_hls_is_used_after_direct_clients_fail(paths, monkeypatch) ->
     [
         ("This video is private", "PRIVATE_VIDEO"),
         ("Sign in to confirm your age", "AGE_RESTRICTED"),
-        ("Sign in to confirm you're not a bot", "PUBLIC_EXTRACTION_BLOCKED"),
+        ("Sign in to confirm you're not a bot", "BOT_CHALLENGE"),
         ("HTTP Error 429: Too Many Requests", "RATE_LIMITED"),
         ("Video unavailable", "VIDEO_UNAVAILABLE"),
-        ("not available in your country", "GEO_RESTRICTED"),
+        ("not available in your country", "REGION_BLOCKED"),
         ("Sign in to view this video", "LOGIN_REQUIRED"),
+        ("Requested format is not available", "FORMAT_UNAVAILABLE"),
+        ("The read operation timed out", "TIMEOUT"),
+        ("Unexpected extractor failure", "IMPORT_FAILED"),
     ],
 )
 def test_errors_are_normalized(detail: str, code: str) -> None:
@@ -442,7 +445,7 @@ def test_diagnostics_record_normalized_fallback_without_raw_secrets(paths, monke
 
     assert result.strategy == "web_safari_hls"
     assert diagnostics["last_successful_strategy"] == "web_safari_hls"
-    assert diagnostics["last_failure_class"] == "PUBLIC_EXTRACTION_BLOCKED"
+    assert diagnostics["last_failure_class"] == "BOT_CHALLENGE"
     assert diagnostics["last_http_status"] == 403
     assert diagnostics["last_login_required"] is False
     assert "secret.example" not in str(diagnostics)
@@ -471,9 +474,10 @@ def test_all_public_strategies_fail_with_region_aware_upload_fallback(paths, mon
     with pytest.raises(YouTubeImportError) as captured:
         service.import_video("https://youtu.be/abc123")
 
-    assert captured.value.code == "PUBLIC_EXTRACTION_BLOCKED"
+    assert captured.value.code == "BOT_CHALLENGE"
     assert "current processing region" in str(captured.value)
-    assert "upload the video directly" in str(captured.value)
+    assert "upload a copy" in str(captured.value)
+    assert "same project" in str(captured.value)
     diagnostics = service.diagnostics()
     assert diagnostics.last_http_status == 403
     assert diagnostics.last_login_required is True

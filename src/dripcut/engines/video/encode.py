@@ -7,6 +7,7 @@ what makes "why does this look worse than that" a one-file investigation.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -175,6 +176,18 @@ class EncodeSettings:
                 args += ["-crf", str(self.resolved_crf()), "-preset", self.resolved_preset()]
                 if self.resolved_crf() == 0 and video_encoder == "libx264":
                     args += ["-qp", "0"]
+                configured_threads = os.environ.get("DRIPCUT_FFMPEG_THREADS")
+                if configured_threads is None and os.environ.get("DRIPCUT_ENV", "").lower() in {
+                    "production",
+                    "prod",
+                }:
+                    configured_threads = "1"
+                if configured_threads:
+                    try:
+                        thread_count = max(1, min(16, int(configured_threads)))
+                    except ValueError:
+                        thread_count = 1
+                    args += ["-threads", str(thread_count)]
             elif video_encoder == "libvpx-vp9":
                 args += ["-crf", str(self.resolved_crf()), "-b:v", "0", "-row-mt", "1"]
             elif video_encoder == "prores_ks":

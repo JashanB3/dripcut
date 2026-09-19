@@ -110,6 +110,7 @@ class WebClipService:
                 "project_id": project.id,
                 "rights_confirmed": True,
                 "rights_confirmed_at": project.content_rights_confirmed_at,
+                "import_state": "VALIDATING_URL",
             },
             idempotency_key=idempotency_key,
         )
@@ -118,11 +119,18 @@ class WebClipService:
 
         def work(active: Job) -> JobResult:
             try:
+                def import_progress(progress: float, stage: str) -> None:
+                    active.metadata["import_state"] = self._youtube_import_state(stage)
+                    active.set_progress(progress * 0.92, stage)
+
+                active.metadata["import_state"] = "FETCHING_METADATA"
                 result = self.container.youtube.import_video(
                     value,
-                    on_progress=lambda progress, stage: active.set_progress(progress * 0.92, stage),
+                    on_progress=import_progress,
                 )
+                active.metadata["import_state"] = "VERIFYING"
                 active.set_progress(0.94, "Checking downloaded video")
+                active.metadata["import_state"] = "REGISTERING"
                 response = self._register_youtube_result(result, value, project=project)
                 active.metadata.update(
                     {
@@ -135,6 +143,7 @@ class WebClipService:
                         "youtube_prepare_seconds": result.prepare_seconds,
                     }
                 )
+                active.metadata["import_state"] = "READY"
                 active.set_progress(0.99, "Ready")
                 source = self.sources.get(response.id)
                 if on_success:
@@ -145,6 +154,7 @@ class WebClipService:
                     data={"source_id": response.id, "project_id": project.id},
                 )
             except Exception:
+                active.metadata["import_state"] = "FAILED"
                 if on_failure:
                     on_failure()
                 project.status = "failed"
@@ -159,6 +169,17 @@ class WebClipService:
                 on_failure()
             return self.job_response(submitted.id, idempotent_replay=True)
         return self.job_response(job.id)
+
+    @staticmethod
+    def _youtube_import_state(stage: str) -> str:
+        """Map customer progress labels onto stable acquisition state names."""
+        if stage == "Fetching video information":
+            return "FETCHING_METADATA"
+        if stage == "Checking downloaded video":
+            return "VERIFYING"
+        if stage == "Ready":
+            return "READY"
+        return "ACQUIRING"
 
     def _register_youtube_result(
         self,
@@ -178,8 +199,16 @@ class WebClipService:
         record.youtube_url = url
         return self._finish_source(record, project=project, project_type="youtube_short")
 
-    def list_projects(self, *, limit: int | None = None) -> list[ProjectResponse]:
-        summaries = self.container.projects.list_projects(limit=limit)
+    def list_projects(
+        self,
+        *,
+        limit: int | None = None,
+        project_ids: set[str] | None = None,
+    ) -> list[ProjectResponse]:
+        summaries = self.container.projects.list_projects(
+            limit=limit,
+            project_ids=project_ids,
+        )
         return [self._project_response(summary) for summary in summaries]
 
     def create_content_project(

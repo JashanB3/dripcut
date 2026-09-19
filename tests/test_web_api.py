@@ -767,8 +767,8 @@ def test_youtube_import_job_registers_a_verified_source(
 def test_youtube_import_job_preserves_normalized_error_code(container, monkeypatch) -> None:
     def blocked(_url: str, *, on_progress=None):
         raise YouTubeImportError(
-            "PUBLIC_EXTRACTION_BLOCKED",
-            "We couldn't retrieve this public video from YouTube right now.",
+            "BOT_CHALLENGE",
+            "YouTube asked the processing server for additional verification.",
             retryable=True,
         )
 
@@ -782,7 +782,7 @@ def test_youtube_import_job_preserves_normalized_error_code(container, monkeypat
         finished = _wait_for_job(client, queued.json()["id"])
 
     assert finished["status"] == "failed"
-    assert finished["error_code"] == "PUBLIC_EXTRACTION_BLOCKED"
+    assert finished["error_code"] == "BOT_CHALLENGE"
 
 
 def test_youtube_import_requires_content_rights_confirmation(container) -> None:

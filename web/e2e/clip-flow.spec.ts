@@ -65,5 +65,34 @@ test.describe("creator clipping journey", () => {
     await expect(page).toHaveURL(/\/home$/);
     await expect(page.getByRole("heading", { name: "Continue creating" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Open sample" })).toBeVisible();
+
+    await page.route("**/api/jobs/youtube", async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "blocked-youtube-job",
+          source_id: "",
+          project_id: "youtube-project",
+          status: "failed",
+          progress: 0,
+          percent: 0,
+          stage: "Failed",
+          elapsed: 1,
+          error: "YouTube asked the processing server for additional verification.",
+          error_code: "BOT_CHALLENGE",
+          hint: "Retry once, or upload a copy you are allowed to use and continue.",
+          retryable: true,
+          artifacts: [],
+        }),
+      });
+    });
+    await page.goto("/auto-clip");
+    await page.getByLabel("YouTube video URL").fill("https://www.youtube.com/watch?v=jNQXAC9IVRw");
+    await page.getByLabel("I own this video or have permission to edit and republish it.").check();
+    await page.getByRole("button", { name: "Import video" }).click();
+    await expect(page.getByText("Keep going with this project")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry YouTube" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Upload video instead" })).toBeVisible();
   });
 });

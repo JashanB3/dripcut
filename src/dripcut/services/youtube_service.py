@@ -58,13 +58,18 @@ _BGUTIL_SCRIPT_HOME = Path("/opt/dripcut/bgutil/server")
 
 YouTubeErrorCode = Literal[
     "PUBLIC_EXTRACTION_BLOCKED",
+    "BOT_CHALLENGE",
     "PRIVATE_VIDEO",
     "LOGIN_REQUIRED",
     "AGE_RESTRICTED",
     "VIDEO_UNAVAILABLE",
     "GEO_RESTRICTED",
+    "REGION_BLOCKED",
     "RATE_LIMITED",
+    "FORMAT_UNAVAILABLE",
+    "TIMEOUT",
     "DOWNLOAD_FAILED",
+    "IMPORT_FAILED",
 ]
 
 
@@ -260,8 +265,9 @@ def _normalize_error(error: Exception) -> YouTubeImportError:
         )
     if any(value in lowered for value in ("not available in your country", "geo restricted", "geo-restricted")):
         return YouTubeImportError(
-            "GEO_RESTRICTED",
-            "This video isn't available from the current server region.",
+            "REGION_BLOCKED",
+            "We couldn't import this video from the current processing region.",
+            hint="Upload a copy you are allowed to use and continue with the same project.",
         )
     if "http error 429" in lowered or "too many requests" in lowered or "rate limit" in lowered:
         return YouTubeImportError(
@@ -280,9 +286,9 @@ def _normalize_error(error: Exception) -> YouTubeImportError:
         )
     ):
         return YouTubeImportError(
-            "PUBLIC_EXTRACTION_BLOCKED",
-            "We couldn't retrieve this public video from YouTube right now.",
-            hint="DripCut will retry supported YouTube playback strategies automatically.",
+            "BOT_CHALLENGE",
+            "YouTube asked the processing server for additional verification.",
+            hint="Retry once, or upload a copy you are allowed to use and continue.",
             retryable=True,
         )
     if "sign in" in lowered or "login required" in lowered:
@@ -290,6 +296,28 @@ def _normalize_error(error: Exception) -> YouTubeImportError:
             "LOGIN_REQUIRED",
             "This video requires an authorized YouTube session.",
             hint="If this is an ordinary public video, retry once before using an operator cookie fallback.",
+        )
+    if any(
+        value in lowered
+        for value in (
+            "requested format is not available",
+            "no video formats found",
+            "no suitable formats",
+            "format is not available",
+        )
+    ):
+        return YouTubeImportError(
+            "FORMAT_UNAVAILABLE",
+            "YouTube did not offer a compatible video format.",
+            hint="Retry once, or upload a copy you are allowed to use and continue.",
+            retryable=True,
+        )
+    if any(value in lowered for value in ("timed out", "timeout", "read operation timed out")):
+        return YouTubeImportError(
+            "TIMEOUT",
+            "YouTube took too long to respond.",
+            hint="Retry once. If it still times out, upload the video instead.",
+            retryable=True,
         )
     if any(
         value in lowered
@@ -303,9 +331,9 @@ def _normalize_error(error: Exception) -> YouTubeImportError:
     ):
         return YouTubeImportError("VIDEO_UNAVAILABLE", "This video is unavailable.")
     return YouTubeImportError(
-        "DOWNLOAD_FAILED",
+        "IMPORT_FAILED",
         "The video was found but could not be downloaded.",
-        hint="Please retry. If the problem continues, use a local video file.",
+        hint="Retry once, or upload a copy you are allowed to use and continue.",
         retryable=True,
     )
 
@@ -559,9 +587,9 @@ class YouTubeImportService:
             error=last_error,
             detail=last_detail,
         )
-        if last_error and last_error.code == "PUBLIC_EXTRACTION_BLOCKED":
+        if last_error and last_error.code in {"PUBLIC_EXTRACTION_BLOCKED", "BOT_CHALLENGE"}:
             raise self._regional_public_error()
-        raise last_error or YouTubeImportError("DOWNLOAD_FAILED", "YouTube metadata could not be retrieved.")
+        raise last_error or YouTubeImportError("IMPORT_FAILED", "YouTube metadata could not be retrieved.")
 
     def import_video(
         self,
@@ -664,9 +692,9 @@ class YouTubeImportService:
             error=last_error,
             detail=last_detail,
         )
-        if last_error and last_error.code == "PUBLIC_EXTRACTION_BLOCKED":
+        if last_error and last_error.code in {"PUBLIC_EXTRACTION_BLOCKED", "BOT_CHALLENGE"}:
             raise self._regional_public_error()
-        raise last_error or YouTubeImportError("DOWNLOAD_FAILED", "The YouTube import failed.")
+        raise last_error or YouTubeImportError("IMPORT_FAILED", "The YouTube import failed.")
 
     def _log_exhausted_failure(
         self,
@@ -693,9 +721,9 @@ class YouTubeImportService:
     @staticmethod
     def _regional_public_error() -> YouTubeImportError:
         return YouTubeImportError(
-            "PUBLIC_EXTRACTION_BLOCKED",
+            "BOT_CHALLENGE",
             "We couldn't import this public video from YouTube from the current processing region.",
-            hint="Please retry shortly or upload the video directly.",
+            hint="Retry once, or upload a copy you are allowed to use and continue with the same project.",
             retryable=True,
         )
 

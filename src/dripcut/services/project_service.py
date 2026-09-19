@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+from contextlib import suppress
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dripcut.core.errors import ProjectError, ValidationError
 from dripcut.core.events import EventBus, EventName
@@ -14,6 +16,9 @@ from dripcut.core.paths import AppPaths
 from dripcut.models.media import MediaInfo
 from dripcut.models.project import Project, ProjectSummary
 from dripcut.utils.fs import dir_size, ensure_dir, human_size
+
+if TYPE_CHECKING:
+    from dripcut.storage.provider import StorageProvider
 
 __all__ = ["ProjectService"]
 
@@ -29,10 +34,20 @@ class ProjectService:
     trivially backed up, and survives an app version the user never installs.
     """
 
-    def __init__(self, paths: AppPaths, events: EventBus) -> None:
+    def __init__(
+        self,
+        paths: AppPaths,
+        events: EventBus,
+        storage: StorageProvider | None = None,
+    ) -> None:
         self.paths = paths
         self.events = events
+        self.storage = storage
         self._lock = threading.RLock()
+
+    def configure_storage(self, storage: StorageProvider) -> None:
+        """Mirror manifests to durable object storage for hosted processes."""
+        self.storage = storage
 
     # -------------------------------------------------------------------- create
 
@@ -74,6 +89,12 @@ class ProjectService:
             try:
                 tmp.write_text(json.dumps(project.to_dict(), indent=2), encoding="utf-8")
                 tmp.replace(manifest)
+                if self.storage is not None:
+                    self.storage.put_file(
+                        self._metadata_key(project.id),
+                        manifest,
+                        content_type="application/json",
+                    )
             except OSError as exc:
                 raise ProjectError(
                     f"Could not save {project.name}.", hint=str(exc)[:160]
@@ -88,6 +109,9 @@ class ProjectService:
             ProjectError: If the manifest is missing or unreadable.
         """
         manifest = self.directory_for(project_id) / MANIFEST_NAME
+        if not manifest.exists() and self.storage is not None:
+            with suppress(Exception):
+                self.storage.materialize(self._metadata_key(project_id), manifest)
         if not manifest.exists():
             raise ProjectError(f"Project {project_id} could not be found.")
         try:
@@ -98,9 +122,22 @@ class ProjectService:
                 hint="Its manifest may be damaged. Check project.json.",
             ) from exc
 
-    def list_projects(self, *, limit: int | None = None) -> list[ProjectSummary]:
+    def list_projects(
+        self,
+        *,
+        limit: int | None = None,
+        project_ids: set[str] | None = None,
+    ) -> list[ProjectSummary]:
         """Summaries for every readable project, most recently updated first."""
         summaries: list[ProjectSummary] = []
+        if project_ids is not None:
+            for project_id in project_ids:
+                try:
+                    summaries.append(self.load(project_id).summary())
+                except ProjectError:
+                    _log.debug("skipping unreadable project %s", project_id)
+            summaries.sort(key=lambda summary: summary.updated_at, reverse=True)
+            return summaries[:limit] if limit else summaries
         if not self.paths.projects.exists():
             return summaries
         for directory in self.paths.projects.iterdir():
@@ -121,6 +158,8 @@ class ProjectService:
             keep_outputs: Leave rendered clips on disk (the default, because losing
                 renders to a mis-click is unforgivable).
         """
+        if self.storage is not None:
+            self.load(project_id)
         directory = self.directory_for(project_id)
         if not directory.exists():
             raise ProjectError(f"Project {project_id} could not be found.")
@@ -131,8 +170,17 @@ class ProjectService:
                 for item in clips.iterdir():
                     shutil.move(str(item), str(keep_root / item.name))
         shutil.rmtree(directory, ignore_errors=True)
+        if self.storage is not None:
+            try:
+                self.storage.delete(self._metadata_key(project_id))
+            except Exception:
+                _log.warning("could not delete durable project manifest %s", project_id)
         self.events.publish(EventName.PROJECT_DELETED, project_id=project_id)
         _log.info("deleted project %s", project_id)
+
+    @staticmethod
+    def _metadata_key(project_id: str) -> str:
+        return f"metadata/projects/{project_id}.json"
 
     def duplicate(self, project_id: str, *, name: str | None = None) -> Project:
         """Copy a project's plan and settings into a new project."""

@@ -264,11 +264,14 @@ class LocalJobQueue(JobQueue):
 
     def wait(self, timeout: float | None = None) -> bool:
         deadline = None if timeout is None else time.monotonic() + timeout
-        while self.busy:
+        while True:
+            with self._lock:
+                pending = any(not future.done() for future in self._futures.values())
+            if not pending:
+                return True
             if deadline is not None and time.monotonic() > deadline:
                 return False
             time.sleep(0.1)
-        return True
 
     def shutdown(self, *, cancel_pending: bool = True) -> None:
         with self._lock:

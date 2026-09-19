@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import shutil
 import threading
@@ -14,12 +15,14 @@ from typing import BinaryIO, Literal, Protocol
 from uuid import UUID
 
 from dripcut.core.errors import ValidationError
-from dripcut.engines.export.queue import JobQueue
+from dripcut.engines.export.queue import JobQueue, JobStateStore, JsonJobStateStore
 from dripcut.models.job import Job
 from dripcut.storage.local import LocalStorageProvider
 from dripcut.storage.models import UploadRejected
 from dripcut.storage.provider import StorageProvider
 from dripcut.utils.fs import ensure_dir, safe_filename, slugify
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -481,3 +484,40 @@ class QueueJobStore:
 
     def get_by_idempotency_key(self, key: str) -> Job | None:
         return self.queue.get_by_idempotency_key(key)
+
+
+class ObjectJobStateStore(JobStateStore):
+    """Persist the single-instance queue snapshot in private object storage."""
+
+    def __init__(
+        self,
+        storage: StorageProvider,
+        cache_path: Path,
+        *,
+        key: str = "metadata/queue/jobs.json",
+    ) -> None:
+        self.storage = storage
+        self.cache_path = cache_path
+        self.key = key
+        self.local = JsonJobStateStore(cache_path)
+
+    def load(self) -> list[dict[str, object]]:
+        if not self.cache_path.is_file():
+            try:
+                self.storage.materialize(self.key, self.cache_path)
+            except Exception:
+                return []
+        return self.local.load()
+
+    def save(self, jobs: list[dict[str, object]]) -> None:
+        self.local.save(jobs)
+        if not self.cache_path.is_file():
+            return
+        try:
+            self.storage.put_file(
+                self.key,
+                self.cache_path,
+                content_type="application/json",
+            )
+        except Exception:
+            logger.warning("could not persist durable job state", exc_info=True)

@@ -419,6 +419,13 @@
 .source-api-note span strong { font-size: 10px; }
 .check-link-button { align-self: flex-start; background: var(--dc-surface-dark); border-radius: 8px; color: white; cursor: pointer; font-size: 10px; font-weight: 750; margin-top: auto; padding: 10px 14px; }
 .source-trust { align-items: center; color: var(--dc-text-3); display: flex; font-size: 10px; gap: 7px; justify-content: center; margin-top: 20px; }
+.youtube-recovery { align-items: center; background: #fff8ed; border: 1px solid #f2d8aa; border-radius: 11px; color: #74511f; display: grid; gap: 10px; grid-template-columns: auto minmax(0, 1fr) auto auto; margin-top: 16px; padding: 12px; }
+.youtube-recovery > svg { color: #ba7418; }
+.youtube-recovery > span { display: flex; flex-direction: column; gap: 2px; }
+.youtube-recovery strong { font-size: var(--dc-text-sm); }
+.youtube-recovery small { font-size: var(--dc-text-xs); line-height: 1.4; }
+.youtube-recovery button { align-items: center; background: white; border: 1px solid #e5c58f; border-radius: var(--dc-radius-md); color: #74511f; cursor: pointer; display: inline-flex; font-size: var(--dc-text-xs); font-weight: 800; gap: 5px; min-height: 36px; padding: 0 11px; }
+.youtube-recovery .youtube-recovery__upload { background: var(--dc-surface-dark); border-color: var(--dc-surface-dark); color: white; }
 .source-error-banner { align-items: center; background: var(--dc-coral-soft); border: 1px solid #f2cbd0; border-radius: 9px; color: var(--dc-danger); display: flex; gap: 8px; margin: 0 auto 12px; max-width: 980px; padding: 10px 12px; }
 .customer-error > span { display: flex; flex: 1; flex-direction: column; gap: 2px; }
 .customer-error strong { font-size: var(--dc-text-sm); }
@@ -840,6 +847,8 @@
   .source-step { border-radius: 15px; padding: 22px 14px; }
   .source-options { gap: 10px; }
   .upload-source-card, .youtube-source-card { min-height: 250px; padding: 18px; }
+  .youtube-recovery { align-items: stretch; grid-template-columns: auto 1fr; }
+  .youtube-recovery button { grid-column: 1 / -1; justify-content: center; width: 100%; }
   .auto-clip-topline { align-items: flex-start; flex-direction: column; }
   .workflow-steps { width: 100%; }
   .workflow-steps span { flex: 1; font-size: 7px; }

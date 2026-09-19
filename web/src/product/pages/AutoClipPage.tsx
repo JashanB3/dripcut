@@ -21,6 +21,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
   const [sourceBusy, setSourceBusy] = useState<"upload" | "youtube" | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [sourceStage, setSourceStage] = useState("");
+  const [failedSourceKind, setFailedSourceKind] = useState<"upload" | "youtube" | null>(null);
   const [job, setJob] = useState<ApiJob | null>(null);
   const [starting, setStarting] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
@@ -33,6 +34,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
 
   const loadFile = async (file: File) => {
     setSourceError(null);
+    setFailedSourceKind(null);
     setSourceBusy("upload");
     setUploadProgress(0);
     setSourceStage("Uploading video");
@@ -40,6 +42,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
       acceptSource(await uploadSource(file, setUploadProgress), file);
     } catch (error) {
       setSourceError(error);
+      setFailedSourceKind("upload");
     } finally {
       setSourceBusy(null);
       setSourceStage("");
@@ -48,6 +51,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
 
   const loadYouTube = async (url: string, rightsConfirmed: boolean) => {
     setSourceError(null);
+    setFailedSourceKind(null);
     setSourceBusy("youtube");
     setUploadProgress(0);
     setSourceStage("Fetching video information");
@@ -58,6 +62,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
       }));
     } catch (error) {
       setSourceError(error);
+      setFailedSourceKind("youtube");
     } finally {
       setSourceBusy(null);
       setSourceStage("");
@@ -153,7 +158,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
         </div>
       </header>
       {sourceError !== null && <CustomerError error={sourceError} fallback="This clipping action could not be completed." />}
-      {state.phase === "source" && <SourcePicker onFile={(file) => void loadFile(file)} onYouTube={(url, rightsConfirmed) => void loadYouTube(url, rightsConfirmed)} busy={sourceBusy} progress={uploadProgress} stage={sourceStage} />}
+      {state.phase === "source" && <SourcePicker onFile={(file) => void loadFile(file)} onYouTube={(url, rightsConfirmed) => void loadYouTube(url, rightsConfirmed)} busy={sourceBusy} progress={uploadProgress} stage={sourceStage} youtubeFailed={failedSourceKind === "youtube" && sourceError !== null} />}
       {state.phase === "configure" && runtime && (
         <>
           <button className="workflow-back" onClick={reset}><ArrowLeft size={16} /> Change source</button>
