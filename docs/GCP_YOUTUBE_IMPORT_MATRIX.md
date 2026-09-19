@@ -26,10 +26,12 @@ The 10:35 sample proves acquisition behavior but exceeds the new production
 | Public short video | PENDING GOOGLE LOGIN | — | — | — | — | — |
 | Normal public video | PENDING GOOGLE LOGIN | — | — | — | — | — |
 | YouTube Shorts URL | PENDING GOOGLE LOGIN | — | — | — | — | — |
-| `youtu.be` URL | PENDING GOOGLE LOGIN | — | — | — | — | — |
-| `youtube.com/watch` URL | PENDING GOOGLE LOGIN | — | — | — | — | — |
+| `youtu.be` URL (`jNQXAC9IVRw`) | BLOCKED `BOT_CHALLENGE` | yt-dlp requested sign-in/cookies | 4 s | — | — | — |
+| `youtube.com/watch` URL (`jNQXAC9IVRw`) | BLOCKED `BOT_CHALLENGE` | yt-dlp requested sign-in/cookies | 5 s | — | — | — |
 | 5–10 minute public video | PENDING GOOGLE LOGIN | — | — | — | — | — |
 | Multiple channels | PENDING GOOGLE LOGIN | — | — | — | — | — |
 
-This table must be completed from `instance-20260915-154845`. A GCE failure will
-remain recorded as a failure; no login/cookie/access-control bypass is permitted.
+The two GCE checks above were run from `instance-20260915-154845` without
+authenticated cookies. A user must complete the exact Google/YouTube login step
+on the VM (or provide a short-lived cookie file) before claiming authenticated
+import reliability. No login/cookie/access-control bypass was used.
