@@ -783,17 +783,24 @@ class YouTubeImportService:
             "fragment_retries": 2,
             "extractor_retries": 1,
             "concurrent_fragment_downloads": 4,
-            "max_filesize": max(
-                1, int(os.environ.get("DRIPCUT_MAX_UPLOAD_MB", "512"))
-            )
-            * 1024
-            * 1024,
             "quiet": True,
             "noprogress": True,
             "no_warnings": True,
             "logger": _YtDlpLogger(import_id, strategy.name),
             "http_headers": {"Accept-Language": "en-US,en;q=0.9"},
         }
+        # The upload cap is for user-provided files, not remote source
+        # acquisition. Applying it to yt-dlp can filter out the MP4 video
+        # stream before merging and leave no usable MP4 on disk. Operators
+        # can still enforce a separate YouTube-only cap when needed.
+        youtube_limit = os.environ.get("DRIPCUT_YOUTUBE_MAX_FILESIZE_MB")
+        if youtube_limit:
+            try:
+                limit_mb = int(youtube_limit)
+            except ValueError:
+                limit_mb = 0
+            if limit_mb > 0:
+                options["max_filesize"] = limit_mb * 1024 * 1024
         if runtimes := _javascript_runtimes():
             options["js_runtimes"] = runtimes
         if proxy := os.environ.get("DRIPCUT_YOUTUBE_PROXY"):
