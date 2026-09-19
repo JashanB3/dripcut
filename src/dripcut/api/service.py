@@ -704,7 +704,14 @@ class WebClipService:
             segments=tuple(segments),
             parameters={"selection_strategy": request.segments[0].strategy},
         )
-        accurate = not self._can_stream_copy_plan(source, segments, request)
+        super_fast = os.environ.get("DRIPCUT_SUPER_FAST_CLIPS", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        # Super-fast production mode deliberately keeps the source framing and
+        # cuts on keyframes so clip generation is mostly a container operation.
+        # This avoids minutes of CPU re-encoding per clip on CPU-only workers.
+        accurate = False if super_fast else not self._can_stream_copy_plan(source, segments, request)
+        effective_output_format = "source" if super_fast else request.output_format
         project = self._project_for_source(source)
         project.plan = plan
         project.status = "processing"
@@ -809,7 +816,7 @@ class WebClipService:
                                 name_pattern="clip-{index:02d}",
                                 container=request.container,
                                 accurate=accurate,
-                                output_format=request.output_format,
+                                output_format=effective_output_format,
                                 portrait_mode=request.portrait_mode,
                                 on_progress=clip_progress,
                                 cancel_token=active.cancel_token,
@@ -826,7 +833,7 @@ class WebClipService:
                                     rendered,
                                     index=segment.index,
                                     duration=segment.duration,
-                                    output_format=request.output_format,
+                                    output_format=effective_output_format,
                                     captions_enabled=False,
                                 )
                             )
@@ -844,7 +851,7 @@ class WebClipService:
                             name_pattern="clip-{index:02d}",
                             container=request.container,
                             accurate=accurate,
-                            output_format=request.output_format,
+                            output_format=effective_output_format,
                             portrait_mode=request.portrait_mode,
                             on_progress=progress_callback,
                             cancel_token=active.cancel_token,
