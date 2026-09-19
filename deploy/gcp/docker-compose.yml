@@ -16,7 +16,7 @@ services:
     volumes:
       - dripcut_state:/var/lib/dripcut
       - /tmp/dripcut:/tmp/dripcut
-      - /opt/dripcut/youtube-cookies.txt:/opt/dripcut/youtube-cookies.txt:ro
+      - /opt/dripcut/youtube-cookies.txt:/opt/dripcut/youtube-cookies.txt
     restart: unless-stopped
     init: true
     mem_limit: 3g
