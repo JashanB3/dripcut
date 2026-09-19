@@ -106,6 +106,16 @@ def test_queue_reports_progress(paths) -> None:
         queue.shutdown()
 
 
+def test_job_progress_does_not_regress_after_a_retry() -> None:
+    job = Job(kind=JobKind.SPLIT, title="progress")
+
+    job.set_progress(0.52, "Rendering clip 4")
+    job.set_progress(0.38, "Retrying clip 4")
+
+    assert job.progress == 0.52
+    assert job.stage == "Retrying clip 4"
+
+
 def test_stats_count_every_status(paths) -> None:
     queue = _queue(paths)
     try:

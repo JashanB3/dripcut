@@ -78,6 +78,12 @@ def test_environment_overrides(monkeypatch, paths, variable, value, attribute) -
     assert attribute(loaded) == expected
 
 
+def test_hardware_acceleration_can_be_disabled_by_environment(monkeypatch, paths) -> None:
+    monkeypatch.setenv("DRIPCUT_HARDWARE_ACCEL", "false")
+
+    assert load_settings(paths.config_file).video.hardware_accel is False
+
+
 def test_validate_rejects_a_bad_port() -> None:
     settings = Settings()
     settings.server.port = 99999

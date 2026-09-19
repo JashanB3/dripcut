@@ -197,6 +197,7 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "DRIPCUT_OLLAMA_HOST": ("ai", "ollama_host"),
     "DRIPCUT_LOG_LEVEL": ("log_level",),
     "DRIPCUT_MAX_WORKERS": ("video", "max_workers"),
+    "DRIPCUT_HARDWARE_ACCEL": ("video", "hardware_accel"),
     "DRIPCUT_OUTPUT": ("output_dir",),
 }
 

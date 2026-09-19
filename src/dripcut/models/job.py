@@ -138,8 +138,9 @@ class Job:
         return not self.status.is_terminal
 
     def set_progress(self, value: float, stage: str = "") -> None:
-        """Update progress, clamping to ``[0, 1]``."""
-        self.progress = max(0.0, min(1.0, float(value)))
+        """Advance progress without letting a retry move the UI backward."""
+        bounded = max(0.0, min(1.0, float(value)))
+        self.progress = max(self.progress, bounded)
         if stage:
             self.stage = stage
         self._changed()

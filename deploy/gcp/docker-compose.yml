@@ -11,6 +11,9 @@ services:
       DRIPCUT_HOME: /var/lib/dripcut
       DRIPCUT_OUTPUT: /var/lib/dripcut/output
       DRIPCUT_TEMP: /tmp/dripcut
+      # This is a CPU-only VM. FFmpeg may list NVENC even when no NVIDIA
+      # device/driver exists, which otherwise causes a failed encode per clip.
+      DRIPCUT_HARDWARE_ACCEL: "false"
     expose:
       - "10000"
     volumes:
