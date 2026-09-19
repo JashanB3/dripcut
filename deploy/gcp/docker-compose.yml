@@ -1,0 +1,62 @@
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: dripcut-api:${DRIPCUT_IMAGE_TAG:-production}
+    env_file:
+      - /opt/dripcut/.env.production
+    environment:
+      PORT: "10000"
+      DRIPCUT_HOME: /var/lib/dripcut
+      DRIPCUT_OUTPUT: /var/lib/dripcut/output
+      DRIPCUT_TEMP: /tmp/dripcut
+    expose:
+      - "10000"
+    volumes:
+      - dripcut_state:/var/lib/dripcut
+      - /tmp/dripcut:/tmp/dripcut
+    restart: unless-stopped
+    init: true
+    mem_limit: 3g
+    cpus: 1.75
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  caddy:
+    image: caddy:2.10-alpine
+    env_file:
+      - /opt/dripcut/.env.production
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    mem_limit: 256m
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  dripcut_state:
+  caddy_data:
+  caddy_config:

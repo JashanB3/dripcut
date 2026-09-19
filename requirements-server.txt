@@ -1,0 +1,18 @@
+# Lean API/worker runtime for the 10 GB Google Compute Engine boot disk.
+# Desktop UI, local Whisper, OpenCV and scene detection remain development extras.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+python-dotenv>=1.0
+certifi>=2024.7.4
+httpx>=0.27
+yt-dlp[default]>=2026.8.19
+bgutil-ytdlp-pot-provider>=2.0.0,<3
+boto3>=1.35
+cryptography>=43.0
+groq>=0.31
+pysubs2>=1.6
+numpy>=1.26
+pillow>=10.0
+rich>=13.7
+ffmpeg-python>=0.2

@@ -17,6 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
+from dripcut.acquisition import AcquisitionJob, AcquisitionStatus, build_acquisition_repository
 from dripcut.admin.repository import build_admin_repository
 from dripcut.api.contracts import (
     AdminOverviewResponse,
@@ -79,7 +80,7 @@ from dripcut.api.stores import (
     ObjectJobStateStore,
     QueueJobStore,
 )
-from dripcut.auth.models import AuthProviderError, AuthResult
+from dripcut.auth.models import AuthProviderError, AuthResult, AuthUser
 from dripcut.auth.provider import AuthProvider, build_auth_provider
 from dripcut.content.models import (
     ContentItemStatus,
@@ -93,7 +94,8 @@ from dripcut.content.repository import build_content_repository
 from dripcut.content.service import ContentService
 from dripcut.core.bootstrap import build_container
 from dripcut.core.container import ServiceContainer
-from dripcut.core.errors import DripCutError
+from dripcut.core.errors import DripCutError, ValidationError
+from dripcut.core.features import enabled
 from dripcut.engines.ai.provider import ScriptBrief, ScriptRewriteAction
 from dripcut.engines.export.queue import LocalJobQueue
 from dripcut.observability.metrics import summarize_pipeline_jobs
@@ -221,9 +223,15 @@ def build_service(container: ServiceContainer | None = None) -> WebClipService:
     storage = build_storage_provider(root / "objects")
     resolved.social.storage = storage
     resolved.projects.configure_storage(storage)
+    max_video_jobs = int(
+        os.environ.get(
+            "DRIPCUT_MAX_CONCURRENT_VIDEO_JOBS",
+            str(resolved.settings.video.max_workers),
+        )
+    )
     web_queue = LocalJobQueue(
         resolved.events,
-        max_workers=resolved.settings.video.max_workers,
+        max_workers=max_video_jobs,
         history_file=resolved.paths.history_file,
         state_store=ObjectJobStateStore(storage, resolved.paths.history_file),
         progress_persist_interval=2.0,
@@ -310,6 +318,8 @@ def create_app(
     social = clip_service.container.social
     social.store = build_social_store(web_root, tenants.name)
     content_repository = build_content_repository(web_root, tenants.name)
+    acquisition_mode = os.environ.get("DRIPCUT_YOUTUBE_ACQUISITION_MODE", "local").strip().lower()
+    acquisition_jobs = build_acquisition_repository()
 
     def source_project_id(source_id: str) -> str | None:
         return clip_service.get_source(source_id).project_id
@@ -358,6 +368,7 @@ def create_app(
     app.state.usage_service = usage
     app.state.admin_repository = admin_repository
     app.state.content_service = content
+    app.state.acquisition_jobs = acquisition_jobs
     app.add_middleware(
         CORSMiddleware,
         allow_origins=sorted(allowed_origins),
@@ -572,6 +583,46 @@ def create_app(
         request.state.user_id = principal.user.id
         request.state.workspace_id = principal.workspace_id
         return principal
+
+    def require_worker(request: Request) -> str:
+        if os.environ.get("DRIPCUT_WORKER_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+            raise HTTPException(status_code=404, detail="Worker API is disabled.")
+        configured = os.environ.get("DRIPCUT_WORKER_TOKEN", "")
+        presented = request.headers.get("authorization", "")
+        token = presented[7:].strip() if presented.lower().startswith("bearer ") else ""
+        if not configured or not token or not __import__("hmac").compare_digest(configured, token):
+            raise HTTPException(status_code=401, detail="Worker authentication is required.")
+        worker_id = request.headers.get("x-dripcut-worker-id", "").strip()
+        if not worker_id or len(worker_id) > 120:
+            raise HTTPException(status_code=400, detail="A valid worker identity is required.")
+        return worker_id
+
+    def acquisition_response(job: AcquisitionJob) -> JobResponse:
+        status = {
+            AcquisitionStatus.CLAIMED: "running", AcquisitionStatus.RUNNING: "running",
+            AcquisitionStatus.UPLOADING: "running", AcquisitionStatus.COMPLETED: "succeeded",
+        }.get(job.status, job.status.value)
+        return JobResponse(
+            id=job.id, source_id=str(job.metadata.get("source_id") or ""), project_id=job.project_id,
+            status=cast(Literal["queued", "running", "succeeded", "failed", "cancelled"], status),
+            progress=float(job.metadata.get("progress") or (1 if job.status is AcquisitionStatus.COMPLETED else 0)),
+            percent=int(float(job.metadata.get("progress") or 0) * 100),
+            stage=str(job.metadata.get("stage") or job.status.value.title()),
+            elapsed=round((job.completed_at or time.time()) - job.created_at, 3),
+            error=job.error_message, error_code=job.error_code,
+            retryable=job.status is AcquisitionStatus.QUEUED and job.attempt_count > 0,
+            created_at=job.created_at, started_at=job.started_at, finished_at=job.completed_at,
+            attempt=job.attempt_count, max_attempts=job.max_attempts,
+        )
+
+    def worker_principal(job: AcquisitionJob) -> Principal:
+        """Service-role principal used only after worker-token verification."""
+        return Principal(
+            user=AuthUser(id=job.owner_id, email="worker@internal.invalid", name="Worker"),
+            workspace_id=job.workspace_id,
+            role="owner",
+            access_token=os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "local-worker"),
+        )
 
     principal_dependency = Depends(current_principal)
 
@@ -1068,6 +1119,21 @@ def create_app(
         ] = None,
         principal: Principal = principal_dependency,
     ) -> JobResponse:
+        if acquisition_mode == "worker":
+            # Preserve the public request/response contract while delegating media
+            # acquisition to the trusted polling worker.
+            value = clip_service.container.youtube.validate_url(payload.url)
+            project = clip_service.create_youtube_project(value, rights_confirmed=payload.rights_confirmed)
+            register_project(principal, project)
+            job = AcquisitionJob(
+                workspace_id=principal.workspace_id,
+                owner_id=principal.user.id,
+                project_id=project.id,
+                source_url=value,
+                metadata={"rights_confirmed": True, "stage": "Queued for YouTube worker"},
+            )
+            acquisition_jobs.create(job)
+            return acquisition_response(job)
         scoped_key = (
             f"{principal.workspace_id}:youtube:{idempotency_key}"
             if idempotency_key
@@ -1087,12 +1153,72 @@ def create_app(
                 on_success=reservation.commit,
                 on_failure=reservation.release,
                 idempotency_key=scoped_key,
+                workspace_id=principal.workspace_id,
             )
             register_job(principal, job)
             return job
         except Exception:
             reservation.release()
             raise
+
+    @app.get("/api/worker/jobs/next", response_model=None)
+    def claim_worker_job(request: Request) -> Response | dict[str, object]:
+        worker_id = require_worker(request)
+        job = acquisition_jobs.claim_next(worker_id, int(os.environ.get("DRIPCUT_WORKER_LEASE_SECONDS", "120")))
+        if job is None:
+            return Response(status_code=204)
+        return {"job": job.to_dict()}
+
+    @app.post("/api/worker/heartbeat")
+    def heartbeat_worker(request: Request, payload: dict[str, object]) -> dict[str, object]:
+        worker_id = require_worker(request)
+        acquisition_jobs.heartbeat_worker(
+            worker_id, current_job_id=str(payload["current_job_id"]) if payload.get("current_job_id") else None,
+            status=str(payload.get("status") or "idle")[:40], version=str(payload.get("version") or "unknown")[:40],
+        )
+        return {"status": "ok"}
+
+    @app.post("/api/worker/jobs/{job_id}/heartbeat")
+    def heartbeat_worker_job(job_id: str, request: Request, payload: dict[str, object]) -> dict[str, object]:
+        worker_id = require_worker(request)
+        status = AcquisitionStatus(str(payload.get("status") or "running"))
+        job = acquisition_jobs.heartbeat(
+            job_id, worker_id, int(os.environ.get("DRIPCUT_WORKER_LEASE_SECONDS", "120")), status=status
+        )
+        return {"job": job.to_dict()}
+
+    @app.post("/api/worker/jobs/{job_id}/complete")
+    def complete_worker_job(job_id: str, request: Request, payload: dict[str, object]) -> dict[str, object]:
+        worker_id = require_worker(request)
+        job = acquisition_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Acquisition job not found.")
+        storage_key = str(payload.get("storage_key") or "")
+        if not storage_key.startswith(f"acquisitions/{job.id}/"):
+            raise HTTPException(status_code=400, detail="Invalid acquisition storage key.")
+        if job.status is AcquisitionStatus.COMPLETED:
+            return {"job": job.to_dict()}
+        metadata = dict(payload.get("metadata") or {})
+        source = clip_service.finalize_worker_youtube(
+            project_id=job.project_id, url=job.source_url, storage_key=storage_key,
+            title=str(metadata.get("title") or ""), channel=str(metadata["channel"]) if metadata.get("channel") else None,
+        )
+        principal = worker_principal(job)
+        register_source(principal, source)
+        metadata["source_id"] = source.id
+        completed = acquisition_jobs.complete(job_id, worker_id, storage_key=storage_key, metadata=metadata)
+        return {"job": completed.to_dict(), "source_id": source.id}
+
+    @app.post("/api/worker/jobs/{job_id}/fail")
+    def fail_worker_job(job_id: str, request: Request, payload: dict[str, object]) -> dict[str, object]:
+        worker_id = require_worker(request)
+        # The worker passes a normalized code and a sanitized, bounded message only.
+        job = acquisition_jobs.fail(
+            job_id, worker_id, code=str(payload.get("error_code") or "UNKNOWN")[:80],
+            message=str(payload.get("error_message") or "YouTube acquisition failed.")[:500],
+            retryable=bool(payload.get("retryable", False)),
+        )
+        return {"job": job.to_dict()}
 
     @app.get("/api/projects", response_model=list[ProjectResponse])
     def list_projects(
@@ -1294,6 +1420,11 @@ def create_app(
         payload: ThumbnailRequest,
         principal: Principal = principal_dependency,
     ) -> ThumbnailGenerationResponse:
+        if not enabled("DRIPCUT_ENABLE_AI_THUMBNAILS", default=True):
+            raise ValidationError(
+                "AI thumbnails are disabled in the production MVP.",
+                hint="Use a frame from a finished clip instead.",
+            )
         tenants.require_access(principal, "project", project_id)
         reservation = usage.reserve_many(
             principal,
@@ -1338,6 +1469,11 @@ def create_app(
         payload: AIEditPlanRequest,
         principal: Principal = principal_dependency,
     ) -> AIEditPlanResponse:
+        if not enabled("DRIPCUT_ENABLE_AI_ANALYSIS", default=True):
+            raise ValidationError(
+                "AI editing is disabled in the production MVP.",
+                hint="Use sequential clipping instead.",
+            )
         tenants.require_access(principal, "source", payload.source_id)
         source = clip_service.source_response(payload.source_id)
         reservation = usage.reserve_many(
@@ -1362,6 +1498,11 @@ def create_app(
         payload: ViralMomentRequest,
         principal: Principal = principal_dependency,
     ) -> ViralMomentAnalysisResponse:
+        if not enabled("DRIPCUT_ENABLE_AI_ANALYSIS", default=True):
+            raise ValidationError(
+                "AI viral-moment detection is disabled in the production MVP.",
+                hint="Use sequential clipping instead.",
+            )
         tenants.require_access(principal, "source", source_id)
         source = clip_service.source_response(source_id)
         reservation = usage.reserve_many(
@@ -1611,6 +1752,7 @@ def create_app(
                 on_success=reservation.commit,
                 on_failure=reservation.release,
                 idempotency_key=scoped_key,
+                workspace_id=principal.workspace_id,
             )
             register_job(principal, job)
             return job
@@ -1623,6 +1765,12 @@ def create_app(
         job_id: str,
         principal: Principal = principal_dependency,
     ) -> JobResponse:
+        if acquisition_mode == "worker":
+            job = acquisition_jobs.get(job_id)
+            if job is not None:
+                if job.workspace_id != principal.workspace_id:
+                    raise TenantAccessDenied("job", job_id)
+                return acquisition_response(job)
         tenants.require_access(principal, "job", job_id)
         job = clip_service.job_response(job_id)
         register_job(principal, job)

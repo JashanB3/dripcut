@@ -6,6 +6,7 @@ import io
 import time
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -49,6 +50,25 @@ def test_health_reports_media_dependencies(container) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "ffmpeg": True, "ffprobe": True}
+
+
+def test_upload_rejected_when_worker_disk_is_below_floor(container, monkeypatch) -> None:
+    monkeypatch.setenv("DRIPCUT_MIN_FREE_DISK_MB", "1536")
+    monkeypatch.setattr(
+        "dripcut.api.service.shutil.disk_usage",
+        lambda _path: SimpleNamespace(total=10_000, used=9_500, free=500 * 1024 * 1024),
+    )
+    app = create_app(build_service(container), require_auth=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/sources/upload",
+            files={"video": ("video.mp4", io.BytesIO(b"not-read"), "video/mp4")},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "STORAGE_CAPACITY_LOW"
+    assert response.json()["error"]["retryable"] is True
 
 
 def test_workspace_admin_can_read_aggregate_operations_metrics(container) -> None:
@@ -377,7 +397,7 @@ def test_content_api_hides_other_workspaces_resources(container, sample_video: P
         assert hidden.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
-def test_standard_plan_drops_incomplete_tail(container, sample_video: Path) -> None:
+def test_standard_plan_keeps_incomplete_tail(container, sample_video: Path) -> None:
     app = create_app(build_service(container), require_auth=False)
     with TestClient(app) as client, sample_video.open("rb") as source:
         asset = client.post(
@@ -388,8 +408,8 @@ def test_standard_plan_drops_incomplete_tail(container, sample_video: Path) -> N
             f"/api/sources/{asset['id']}/standard-plan",
             json={"duration": 2.5, "count": "max"},
         ).json()
-        assert plan["max_count"] == 2
-        assert plan["segments"][-1]["end"] == 5
+        assert plan["max_count"] == 3
+        assert abs(plan["segments"][-1]["end"] - 6) < 0.1
 
 
 def test_render_idempotency_key_replays_the_original_job(

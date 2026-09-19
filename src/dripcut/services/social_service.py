@@ -261,12 +261,60 @@ class SocialScheduleService:
         caption: str,
         principal: Principal | None = None,
     ) -> SocialSchedule:
+        clips = self.clips_in_archive(archive)
+        return self._create_schedule_for_assets(
+            clip_assets=[(clip, str(archive)) for clip in clips],
+            archive_label=archive.name,
+            project_id=project_id,
+            platforms=platforms,
+            interval_minutes=interval_minutes,
+            start_at=start_at,
+            caption=caption,
+            principal=principal,
+        )
+
+    def create_schedule_for_clips(
+        self,
+        *,
+        clip_assets: list[tuple[str, str]],
+        project_id: str,
+        platforms: list[str],
+        interval_minutes: int,
+        start_at: str,
+        caption: str,
+        principal: Principal | None = None,
+    ) -> SocialSchedule:
+        """Schedule durable object-store clips without building a duplicate ZIP."""
+        if not clip_assets:
+            raise ValidationError("Create clips before scheduling posts.")
+        return self._create_schedule_for_assets(
+            clip_assets=clip_assets,
+            archive_label=f"{len(clip_assets)} stored clips",
+            project_id=project_id,
+            platforms=platforms,
+            interval_minutes=interval_minutes,
+            start_at=start_at,
+            caption=caption,
+            principal=principal,
+        )
+
+    def _create_schedule_for_assets(
+        self,
+        *,
+        clip_assets: list[tuple[str, str]],
+        archive_label: str,
+        project_id: str,
+        platforms: list[str],
+        interval_minutes: int,
+        start_at: str,
+        caption: str,
+        principal: Principal | None,
+    ) -> SocialSchedule:
         selected = [item for item in platforms if item in {"instagram", "youtube"}]
         if not selected:
             raise ValidationError("Choose Instagram, YouTube, or both.")
         if interval_minutes < 5:
             raise ValidationError("Use at least 5 minutes between posts.")
-        clips = self.clips_in_archive(archive)
         start = self._parse_start(start_at)
         template = (caption or "").strip() or "{clip} #shorts #reels"
         workspace_id, access_token = _identity(principal)
@@ -282,7 +330,7 @@ class SocialScheduleService:
         }
         posts: list[ScheduledPost] = []
         slot = 0
-        for clip in clips:
+        for clip, asset_reference in clip_assets:
             clean_name = Path(clip).stem
             for platform in selected:
                 publish_at = start + timedelta(minutes=interval_minutes * slot)
@@ -294,7 +342,7 @@ class SocialScheduleService:
                         project_id=project_id,
                         platform=platform,  # type: ignore[arg-type]
                         clip_name=clip,
-                        archive=str(archive),
+                        archive=asset_reference,
                         publish_at=publish_at.isoformat(timespec="minutes"),
                         caption=(
                             template.replace("{clip}", clean_name).replace(
@@ -309,8 +357,8 @@ class SocialScheduleService:
         schedule = SocialSchedule(
             id=schedule_id,
             project_id=project_id,
-            archive=str(archive),
-            archive_name=archive.name,
+            archive=clip_assets[0][1],
+            archive_name=archive_label,
             created_at=time.time(),
             posts=posts,
             workspace_id=workspace_id,
@@ -524,6 +572,17 @@ class SocialScheduleService:
         )
 
     def _extract_clip(self, post: ScheduledPost) -> Path:
+        if post.archive.startswith("object://"):
+            if self.storage is None:
+                raise ValidationError("Object storage is unavailable for this scheduled clip.")
+            target_dir = ensure_dir(self.paths.temp / "publishing" / post.id)
+            target = target_dir / safe_filename(
+                Path(post.clip_name).name, fallback="clip.mp4"
+            )
+            try:
+                return self.storage.materialize(post.archive.removeprefix("object://"), target)
+            except Exception as error:
+                raise ValidationError("The scheduled clip is no longer available.") from error
         archive = Path(post.archive)
         if not archive.is_file():
             raise ValidationError("The scheduled ZIP is no longer available.")

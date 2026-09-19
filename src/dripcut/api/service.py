@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import resource
 import shutil
+import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -50,8 +53,8 @@ from dripcut.api.stores import (
     SourceAssetStore,
 )
 from dripcut.core.container import ServiceContainer
-from dripcut.core.errors import ValidationError
-from dripcut.engines.ai.thumbnail import inspect_frame, usable_frames
+from dripcut.core.errors import DripCutError, StorageCapacityError, ValidationError
+from dripcut.core.features import enabled, mvp_profile
 from dripcut.engines.subtitle.styles import get_preset
 from dripcut.models.clip import Segment, SegmentSource, SplitMode, SplitPlan
 from dripcut.models.job import Job, JobKind, JobResult
@@ -75,6 +78,7 @@ class WebClipService:
         self.jobs = jobs
 
     def import_upload(self, file_name: str, stream: BinaryIO) -> SourceAssetResponse:
+        self._require_disk_capacity("accept an upload")
         record = self.sources.save_upload(file_name, stream)
         return self._finish_source(record, project_type="auto_clip")
 
@@ -82,6 +86,7 @@ class WebClipService:
         self, url: str, *, rights_confirmed: bool = False
     ) -> SourceAssetResponse:
         value = self._require_youtube_permission(url, rights_confirmed)
+        self._require_disk_capacity("import a YouTube video")
         project = self._start_youtube_project(value)
         try:
             result = self.container.youtube.import_video(value)
@@ -91,6 +96,33 @@ class WebClipService:
             self.container.projects.save(project)
             raise
 
+    def create_youtube_project(self, url: str, *, rights_confirmed: bool) -> ProjectResponse:
+        """Create the normal project shell before a trusted worker acquires media."""
+        value = self._require_youtube_permission(url, rights_confirmed)
+        self._require_disk_capacity("queue a YouTube import")
+        return self._project_response(self._start_youtube_project(value).summary())
+
+    def finalize_worker_youtube(
+        self,
+        *,
+        project_id: str,
+        url: str,
+        storage_key: str,
+        title: str = "",
+        channel: str | None = None,
+    ) -> SourceAssetResponse:
+        """Adopt a worker-uploaded object through the existing source pipeline."""
+        project = self.container.projects.load(project_id)
+        staging = self.container.paths.temp / "worker-acquisitions" / project_id / Path(storage_key).name
+        self.sources.storage.materialize(storage_key, staging)  # type: ignore[attr-defined]
+        try:
+            record = self.sources.save_path(staging, kind="youtube", title=title)  # type: ignore[attr-defined]
+            record.channel = channel
+            record.youtube_url = url
+            return self._finish_source(record, project=project, project_type="youtube_short")
+        finally:
+            staging.unlink(missing_ok=True)
+
     def create_youtube_import(
         self,
         url: str,
@@ -99,7 +131,9 @@ class WebClipService:
         on_success: Callable[[], None] | None = None,
         on_failure: Callable[[], None] | None = None,
         idempotency_key: str | None = None,
+        workspace_id: str = "",
     ) -> JobResponse:
+        self._require_workspace_capacity(workspace_id)
         value = self._require_youtube_permission(url, rights_confirmed)
         project = self._start_youtube_project(value)
         job = Job(
@@ -111,6 +145,7 @@ class WebClipService:
                 "rights_confirmed": True,
                 "rights_confirmed_at": project.content_rights_confirmed_at,
                 "import_state": "VALIDATING_URL",
+                "workspace_id": workspace_id,
             },
             idempotency_key=idempotency_key,
         )
@@ -118,6 +153,7 @@ class WebClipService:
         self.container.projects.save(project)
 
         def work(active: Job) -> JobResult:
+            started = time.monotonic()
             try:
                 def import_progress(progress: float, stage: str) -> None:
                     active.metadata["import_state"] = self._youtube_import_state(stage)
@@ -128,6 +164,7 @@ class WebClipService:
                     value,
                     on_progress=import_progress,
                 )
+                downloaded_bytes = result.path.stat().st_size
                 active.metadata["import_state"] = "VERIFYING"
                 active.set_progress(0.94, "Checking downloaded video")
                 active.metadata["import_state"] = "REGISTERING"
@@ -141,6 +178,10 @@ class WebClipService:
                         "youtube_metadata_seconds": result.metadata_seconds,
                         "youtube_download_seconds": result.download_seconds,
                         "youtube_prepare_seconds": result.prepare_seconds,
+                        "download_bytes": downloaded_bytes,
+                        "source_duration_seconds": result.metadata.duration,
+                        "peak_process_rss_bytes": self._peak_rss_bytes(),
+                        "total_seconds": round(time.monotonic() - started, 3),
                     }
                 )
                 active.metadata["import_state"] = "READY"
@@ -190,14 +231,25 @@ class WebClipService:
     ) -> SourceAssetResponse:
         downloaded = result.path
         metadata = result.metadata
-        record = self.sources.save_path(
-            downloaded,
-            kind="youtube",
-            title=metadata.title or downloaded.stem,
-        )
-        record.channel = metadata.channel
-        record.youtube_url = url
-        return self._finish_source(record, project=project, project_type="youtube_short")
+        try:
+            record = self.sources.save_path(
+                downloaded,
+                kind="youtube",
+                title=metadata.title or downloaded.stem,
+            )
+            record.channel = metadata.channel
+            record.youtube_url = url
+            return self._finish_source(record, project=project, project_type="youtube_short")
+        finally:
+            # yt-dlp gets an isolated job directory. Once the verified source is
+            # copied into the source store, the acquisition scratch data is dead.
+            youtube_temp = (self.container.paths.temp / "youtube").resolve()
+            try:
+                downloaded.resolve().relative_to(youtube_temp)
+            except ValueError:
+                pass
+            else:
+                shutil.rmtree(downloaded.parent, ignore_errors=True)
 
     def list_projects(
         self,
@@ -252,6 +304,10 @@ class WebClipService:
     def create_thumbnail_candidates(
         self, project_id: str, request: ThumbnailRequest
     ) -> ThumbnailGenerationResponse:
+        # OpenCV is intentionally absent from the lean production image while
+        # AI thumbnails are disabled. Import it only when this optional route runs.
+        from dripcut.engines.ai.thumbnail import inspect_frame, usable_frames
+
         project = self.container.projects.load(project_id)
         if not project.source_asset_id:
             raise ValidationError("Add a source video before creating thumbnails.")
@@ -520,16 +576,31 @@ class WebClipService:
         self, request: ScheduleCreateRequest, principal: Principal | None = None
     ) -> ScheduleResponse:
         project = self.container.projects.load(request.project_id)
-        archive = self._project_archive(project)
-        schedule = self.container.social.create_schedule_for_archive(
-            archive=Path(archive.path),
-            project_id=project.id,
-            platforms=list(request.platforms),
-            interval_minutes=request.interval_minutes,
-            start_at=request.start_at,
-            caption=request.caption,
-            principal=principal,
-        )
+        if mvp_profile():
+            clips = self._project_clips(project)
+            schedule = self.container.social.create_schedule_for_clips(
+                clip_assets=[
+                    (clip.name, f"object://{clip.storage_key}" if clip.storage_key else clip.path)
+                    for clip in clips
+                ],
+                project_id=project.id,
+                platforms=[platform for platform in request.platforms if platform == "youtube"],
+                interval_minutes=request.interval_minutes,
+                start_at=request.start_at,
+                caption=request.caption,
+                principal=principal,
+            )
+        else:
+            archive = self._project_archive(project)
+            schedule = self.container.social.create_schedule_for_archive(
+                archive=Path(archive.path),
+                project_id=project.id,
+                platforms=list(request.platforms),
+                interval_minutes=request.interval_minutes,
+                start_at=request.start_at,
+                caption=request.caption,
+                principal=principal,
+            )
         project.scheduling_status = "draft"
         self.container.projects.save(project)
         ready = all(
@@ -580,14 +651,14 @@ class WebClipService:
 
     def standard_plan(self, source_id: str, request: StandardPlanRequest) -> StandardPlanResponse:
         source = self.sources.get(source_id)
-        maximum = max(0, int(source.duration // request.duration))
+        maximum = max(0, math.ceil(source.duration / request.duration))
         count = maximum if request.count == "max" else min(maximum, max(0, request.count))
         segments = [
             ClipSegmentRequest(
                 id=f"standard-segment-{index + 1}",
                 index=index + 1,
                 start=round(index * request.duration, 3),
-                end=round((index + 1) * request.duration, 3),
+                end=round(min(source.duration, (index + 1) * request.duration), 3),
             )
             for index in range(count)
         ]
@@ -605,9 +676,23 @@ class WebClipService:
         on_success: Callable[[], None] | None = None,
         on_failure: Callable[[], None] | None = None,
         idempotency_key: str | None = None,
+        workspace_id: str = "",
     ) -> JobResponse:
+        self._require_workspace_capacity(workspace_id)
+        self._require_disk_capacity("queue a render")
         source = self.sources.get(request.source_id)
         segments = self._validated_segments(request.segments, source.duration)
+        constrained_mvp = mvp_profile()
+        if constrained_mvp and any(item.source is SegmentSource.AI for item in segments):
+            raise ValidationError(
+                "AI clip selection is disabled in the production MVP.",
+                hint="Use sequential clips instead.",
+            )
+        if constrained_mvp and request.auto_captions:
+            raise ValidationError(
+                "Automatic captions are disabled in the production MVP.",
+                hint="Create the clips without captions.",
+            )
         plan = SplitPlan(
             source=Path(source.path),
             mode=cast(
@@ -645,6 +730,7 @@ class WebClipService:
                 "output_format": request.output_format,
                 "captions_enabled": request.auto_captions,
                 "caption_style": request.caption_style,
+                "workspace_id": workspace_id,
             },
             idempotency_key=idempotency_key,
         )
@@ -652,13 +738,17 @@ class WebClipService:
         self.container.projects.save(project)
 
         def work(active: Job) -> JobResult:
+            pipeline_started = time.monotonic()
             try:
+                self._require_disk_capacity("start a render")
                 transcript = None
                 output_dir = self.artifacts.output_dir(active.id)
                 timings: dict[str, float | bool] = {}
                 subtitle_paths: list[Path | None] | None = None
                 caption_overlays: list[list[tuple[Path, float, float]]] | None = None
                 caption_asset_dirs: list[Path] = []
+                registered_clips: list[ArtifactRecord] = []
+                r2_upload_seconds = 0.0
 
                 def transcribe(progress_callback) -> Any:
                     started = time.monotonic()
@@ -690,7 +780,63 @@ class WebClipService:
                     return result
 
                 def render(progress_callback) -> list[Path]:
+                    nonlocal r2_upload_seconds
                     started = time.monotonic()
+                    if constrained_mvp:
+                        rendered_paths: list[Path] = []
+                        total = len(segments)
+                        for position, segment in enumerate(segments, start=1):
+                            single_plan = SplitPlan(
+                                source=plan.source,
+                                mode=plan.mode,
+                                segments=(segment,),
+                                parameters=plan.parameters,
+                            )
+
+                            def clip_progress(
+                                value: float,
+                                stage: str,
+                                clip_position: int = position,
+                            ) -> None:
+                                progress_callback(
+                                    ((clip_position - 1) + value) / total,
+                                    f"Clip {clip_position} of {total} · {stage}",
+                                )
+
+                            rendered = self.container.split.render(
+                                single_plan,
+                                output_dir,
+                                name_pattern="clip-{index:02d}",
+                                container=request.container,
+                                accurate=accurate,
+                                output_format=request.output_format,
+                                portrait_mode=request.portrait_mode,
+                                on_progress=clip_progress,
+                                cancel_token=active.cancel_token,
+                                stem=source.title,
+                            )[0]
+                            active.set_progress(
+                                min(0.92, position / total * 0.92),
+                                f"Uploading clip {position} of {total}",
+                            )
+                            upload_started = time.monotonic()
+                            registered_clips.append(
+                                self.artifacts.register_clip(
+                                    active.id,
+                                    rendered,
+                                    index=segment.index,
+                                    duration=segment.duration,
+                                    output_format=request.output_format,
+                                    captions_enabled=False,
+                                )
+                            )
+                            r2_upload_seconds += time.monotonic() - upload_started
+                            rendered_paths.append(rendered)
+                            rendered.unlink(missing_ok=True)
+                        timings["clip_render_seconds"] = round(
+                            time.monotonic() - started, 3
+                        )
+                        return rendered_paths
                     try:
                         rendered = self.container.split.render(
                             plan,
@@ -733,11 +879,10 @@ class WebClipService:
                     )
                     active.set_progress(0.29, "Adding captions")
                     preparation_started = time.monotonic()
-                    video_size = {
-                        "portrait": (1080, 1920),
-                        "square": (1080, 1080),
-                        "landscape": (1920, 1080),
-                    }.get(request.output_format, (source.width, source.height))
+                    video_size = self.container.split.output_size(
+                        request.output_format,
+                        (source.width, source.height),
+                    )
                     if native_subtitles:
                         subtitle_paths = []
                     else:
@@ -856,7 +1001,7 @@ class WebClipService:
                     )
 
                 active.set_progress(0.94, "Finalizing downloads")
-                clips = [
+                clips = registered_clips or [
                     self.artifacts.register_clip(
                         active.id,
                         path,
@@ -867,22 +1012,36 @@ class WebClipService:
                     )
                     for path, segment in zip(outputs, segments, strict=True)
                 ]
-                active.set_progress(0.98, "Finalizing ZIP")
-                archive_started = time.monotonic()
-                archive = self.artifacts.create_zip(
-                    active.id, clips, source_title=source.title
-                )
-                timings["zip_seconds"] = round(time.monotonic() - archive_started, 3)
+                archive = None
+                if enabled("DRIPCUT_CREATE_ZIP", default=not constrained_mvp):
+                    active.set_progress(0.98, "Finalizing ZIP")
+                    archive_started = time.monotonic()
+                    archive = self.artifacts.create_zip(
+                        active.id, clips, source_title=source.title
+                    )
+                    timings["zip_seconds"] = round(time.monotonic() - archive_started, 3)
+                timings["r2_upload_seconds"] = round(r2_upload_seconds, 3)
+                timings["peak_process_rss_bytes"] = float(self._peak_rss_bytes())
+                timings["total_seconds"] = round(time.monotonic() - pipeline_started, 3)
                 active.metadata["pipeline_timings"] = timings
-                project.outputs = [*outputs, Path(archive.path)]
-                project.artifact_ids = [item.id for item in [*clips, archive]]
+                project.outputs = [Path(archive.path)] if archive else []
+                project.artifact_ids = [item.id for item in clips]
+                if archive:
+                    project.artifact_ids.append(archive.id)
                 project.status = "completed"
                 self.container.projects.save(project)
+                if constrained_mvp:
+                    self._delete_local_source(source)
+                    shutil.rmtree(output_dir, ignore_errors=True)
                 if on_success:
                     on_success()
                 return JobResult(
-                    outputs=[*outputs, Path(archive.path)],
-                    message=f"Created {len(outputs)} clips and one ZIP archive.",
+                    outputs=[Path(archive.path)] if archive else [],
+                    message=(
+                        f"Created {len(clips)} clips and one ZIP archive."
+                        if archive
+                        else f"Created and uploaded {len(clips)} clips."
+                    ),
                     data={
                         "source_id": source.id,
                         "project_id": project.id,
@@ -983,6 +1142,19 @@ class WebClipService:
                 return artifact
         raise ValidationError("Render a project ZIP before creating a schedule.")
 
+    def _project_clips(self, project: Project) -> list[ArtifactRecord]:
+        clips: list[ArtifactRecord] = []
+        for artifact_id in project.artifact_ids:
+            try:
+                artifact = self.artifacts.get(artifact_id)
+            except ValidationError:
+                continue
+            if artifact.kind == "clip":
+                clips.append(artifact)
+        if not clips:
+            raise ValidationError("Create clips before scheduling posts.")
+        return sorted(clips, key=lambda item: item.index or 0)
+
     @staticmethod
     def _schedule_response(schedule: Any, *, publish_ready: bool) -> ScheduleResponse:
         return ScheduleResponse(
@@ -1071,6 +1243,63 @@ class WebClipService:
         self.container.projects.save(resolved_project)
         self.sources.update(record)
         return self._source_response(record)
+
+    def _require_disk_capacity(self, operation: str) -> None:
+        """Reject disk-heavy work before the VM's small boot disk becomes unsafe."""
+        try:
+            minimum_mb = max(256, int(os.environ.get("DRIPCUT_MIN_FREE_DISK_MB", "1536")))
+        except ValueError:
+            minimum_mb = 1536
+        usage = shutil.disk_usage(self.container.paths.temp)
+        free_mb = usage.free // (1024 * 1024)
+        if free_mb < minimum_mb:
+            raise StorageCapacityError(
+                f"There is not enough free worker disk space to {operation}.",
+                hint=(
+                    f"Try again after current jobs finish. The worker requires {minimum_mb} MB "
+                    f"free and currently has {free_mb} MB."
+                ),
+            )
+
+    @staticmethod
+    def _peak_rss_bytes() -> int:
+        """Return the process high-water RSS in bytes on Linux and macOS."""
+        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        return value if sys.platform == "darwin" else value * 1024
+
+    def _delete_local_source(self, source: SourceAssetRecord) -> None:
+        """Delete only files owned by the source store, never arbitrary inputs."""
+        root = getattr(self.sources, "root", None)
+        if root is None:
+            return
+        source_path = Path(source.path).resolve()
+        try:
+            source_path.relative_to(Path(root).resolve())
+        except ValueError:
+            return
+        source_path.unlink(missing_ok=True)
+
+    def _require_workspace_capacity(self, workspace_id: str) -> None:
+        """Bound one customer's queued/running work without reducing VM concurrency."""
+        if not workspace_id:
+            return
+        try:
+            maximum = max(1, int(os.environ.get("DRIPCUT_MAX_ACTIVE_JOBS_PER_USER", "5")))
+        except ValueError:
+            maximum = 5
+        queue = self.container.try_resolve("queue")
+        active = queue.active_jobs() if queue is not None else []
+        owned = sum(
+            1 for job in active if str(job.metadata.get("workspace_id", "")) == workspace_id
+        )
+        if owned >= maximum:
+            raise DripCutError(
+                "You already have the maximum number of active video jobs.",
+                hint="Wait for a queued or processing job to finish, then try again.",
+                code="ACTIVE_JOB_LIMIT",
+                status_code=429,
+                retryable=True,
+            )
 
     def _require_youtube_permission(self, url: str, confirmed: bool) -> str:
         value = self.container.youtube.validate_url(url)
@@ -1174,7 +1403,7 @@ class WebClipService:
         download_artifact_id = None
         for artifact_id in reversed(summary.artifact_ids):
             try:
-                if self.artifacts.get(artifact_id).kind == "zip":
+                if self.artifacts.get(artifact_id).kind in {"zip", "clip"}:
                     download_artifact_id = artifact_id
                     break
             except ValidationError:

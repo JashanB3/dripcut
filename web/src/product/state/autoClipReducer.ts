@@ -59,9 +59,9 @@ export const initialAutoClipState: AutoClipState = {
   durationChoice: 30,
   customDuration: 30,
   count: 1,
-  platforms: ["youtube", "instagram"],
+  platforms: ["youtube"],
   outputFormat: "portrait",
-  autoCaptions: true,
+  autoCaptions: false,
   aiEnabled: false,
   recommendations: [],
   acceptedRecommendationIds: [],
@@ -78,7 +78,7 @@ export const selectedDuration = (state: AutoClipState): number =>
 
 export const maximumClipCount = (state: AutoClipState): number => {
   if (!state.source) return 0;
-  return Math.max(0, Math.floor(state.source.duration / Math.max(selectedDuration(state), 1)));
+  return Math.max(0, Math.ceil(state.source.duration / Math.max(selectedDuration(state), 1)));
 };
 
 export const selectedSegments = (state: AutoClipState): ClipSegment[] => {
@@ -130,7 +130,7 @@ export function autoClipReducer(state: AutoClipState, action: AutoClipAction): A
         currentTime: 0,
         playing: false,
         renderStage: 0,
-        count: Math.min(5, Math.max(0, Math.floor(action.source.duration / selectedDuration(state)))),
+        count: Math.max(0, Math.ceil(action.source.duration / selectedDuration(state))),
       };
     case "apply-template":
       return {
@@ -145,13 +145,11 @@ export function autoClipReducer(state: AutoClipState, action: AutoClipAction): A
       };
     case "set-duration": {
       const next = { ...state, durationChoice: action.value };
-      const count = clampCount(next, next.count);
-      return { ...next, count: count || (maximumClipCount(next) > 0 ? 1 : 0) };
+      return { ...next, count: maximumClipCount(next) };
     }
     case "set-custom-duration": {
       const next = { ...state, customDuration: Math.max(5, Math.min(300, action.value)) };
-      const count = clampCount(next, next.count);
-      return { ...next, count: count || (maximumClipCount(next) > 0 ? 1 : 0) };
+      return { ...next, count: maximumClipCount(next) };
     }
     case "set-count":
       return { ...state, count: clampCount(state, action.value) };

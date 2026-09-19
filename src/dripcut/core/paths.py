@@ -112,7 +112,7 @@ def app_paths() -> AppPaths:
         models=home / "models",
         plugins=home / "plugins",
         output=Path(os.environ.get("DRIPCUT_OUTPUT", default_output)).expanduser(),
-        temp=cache / "tmp",
+        temp=Path(os.environ.get("DRIPCUT_TEMP", cache / "tmp")).expanduser().resolve(),
         history_file=home / "history.json",
     ).create_all()
 

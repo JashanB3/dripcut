@@ -43,8 +43,9 @@ describe("autoClipReducer", () => {
     const shortSource = { ...source, duration: 18 };
     let state = autoClipReducer(initialAutoClipState, { type: "source-loaded", source: shortSource });
 
-    expect(state.count).toBe(0);
-    state = autoClipReducer(state, { type: "set-duration", value: 15 });
     expect(state.count).toBe(1);
+    state = autoClipReducer(state, { type: "set-duration", value: 15 });
+    expect(state.count).toBe(2);
+    expect(selectedSegments(state)[1]).toMatchObject({ start: 15, end: 18 });
   });
 });

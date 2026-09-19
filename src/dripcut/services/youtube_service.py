@@ -783,7 +783,11 @@ class YouTubeImportService:
             "fragment_retries": 2,
             "extractor_retries": 1,
             "concurrent_fragment_downloads": 4,
-            "max_filesize": 2 * 1024 * 1024 * 1024,
+            "max_filesize": max(
+                1, int(os.environ.get("DRIPCUT_MAX_UPLOAD_MB", "512"))
+            )
+            * 1024
+            * 1024,
             "quiet": True,
             "noprogress": True,
             "no_warnings": True,

@@ -28,7 +28,7 @@ export function ClipResults({ job, onBack, onSchedule }: { job: ApiJob; onBack: 
   return (
     <section className="clip-results-page">
       <header className="results-header">
-        <div><span className="preview-badge">Render complete · {job.elapsed.toFixed(1)} seconds</span><h1>Your clips are ready.</h1><p>Preview each result, download individual clips, or take the complete ZIP.</p></div>
+        <div><span className="preview-badge">Render complete · {job.elapsed.toFixed(1)} seconds</span><h1>Your clips are ready.</h1><p>Preview, download, or schedule each finished clip.</p></div>
         <div className="results-header__actions"><button className="secondary-action" onClick={onBack}>Edit clip plan</button>{youtubePublishingBeta && onSchedule && <button className="secondary-action" onClick={onSchedule}><CalendarClock size={16} /> Schedule</button>}{job.zipArtifact && <a className="primary-action" href={job.zipArtifact.downloadUrl} download><Download size={17} /> Download ZIP</a>}</div>
       </header>
       <div className="results-selection-bar">

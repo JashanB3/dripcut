@@ -188,6 +188,7 @@ def _hydrate(cls: type, data: dict[str, Any]) -> Any:
 _ENV_MAP: dict[str, tuple[str, ...]] = {
     "DRIPCUT_PORT": ("server", "port"),
     "DRIPCUT_HOST": ("server", "host"),
+    "DRIPCUT_MAX_UPLOAD_MB": ("server", "max_upload_mb"),
     "DRIPCUT_THEME": ("ui", "theme"),
     "DRIPCUT_WHISPER_MODEL": ("ai", "whisper_model"),
     "DRIPCUT_TRANSCRIPTION_PROVIDER": ("ai", "transcription_provider"),

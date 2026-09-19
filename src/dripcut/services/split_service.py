@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -110,6 +111,42 @@ class SplitService:
 
     # -------------------------------------------------------------------- render
 
+    @staticmethod
+    def output_size(
+        output_format: str,
+        source_size: tuple[int, int] = (1920, 1080),
+    ) -> tuple[int, int]:
+        """Resolve export dimensions, with a lower-footprint hosted profile."""
+        profile = str(output_format)
+        if os.environ.get("DRIPCUT_RENDER_PROFILE", "").strip().lower() == "720p":
+            return {
+                "square": (720, 720),
+                "portrait": (720, 1280),
+                "landscape": (1280, 720),
+            }.get(profile, source_size)
+        return {
+            "square": (1080, 1080),
+            "portrait": (1080, 1920),
+            "landscape": (1920, 1080),
+        }.get(profile, source_size)
+
+    @staticmethod
+    def encode_settings(container: str, quality: Quality) -> EncodeSettings:
+        """Resolve the low-CPU hosted encoder profile in one place."""
+        resolved_quality = quality if isinstance(quality, Quality) else Quality(str(quality))
+        preset = os.environ.get("DRIPCUT_FFMPEG_PRESET", "").strip() or None
+        configured_fps = os.environ.get("DRIPCUT_MAX_OUTPUT_FPS", "").strip()
+        try:
+            fps = min(30.0, max(1.0, float(configured_fps))) if configured_fps else None
+        except ValueError:
+            fps = 30.0
+        return EncodeSettings.for_container(
+            container,
+            quality=resolved_quality,
+            preset=preset,
+            fps=fps,
+        )
+
     def render(
         self,
         plan: SplitPlan,
@@ -139,16 +176,12 @@ class SplitService:
         output_dir = ensure_dir(destination)
         base_stem = safe_filename(stem or plan.source.stem)
         resolved_quality = quality if isinstance(quality, Quality) else Quality(str(quality))
-        settings = EncodeSettings.for_container(container, quality=resolved_quality)
+        settings = self.encode_settings(container, resolved_quality)
         outputs: list[Path] = []
         total = plan.count
         profile = str(output_format)
         portrait = str(portrait_mode)
-        target_size = {
-            "square": (1080, 1080),
-            "portrait": (1080, 1920),
-            "landscape": (1920, 1080),
-        }.get(profile, (1920, 1080))
+        target_size = self.output_size(profile)
         should_reframe = resize is not None or profile in {
             "portrait",
             "square",
@@ -187,9 +220,7 @@ class SplitService:
                     resize=resize,
                     subtitles=subtitle_path,
                     caption_overlays=overlays,
-                    settings=EncodeSettings.for_container(
-                        container, quality=resolved_quality
-                    ),
+                    settings=self.encode_settings(container, resolved_quality),
                     on_progress=segment_progress,
                     cancel_token=cancel_token,
                 )
@@ -199,7 +230,7 @@ class SplitService:
                     target,
                     start=segment.start,
                     end=segment.end,
-                    settings=EncodeSettings.for_container(container, quality=resolved_quality),
+                    settings=self.encode_settings(container, resolved_quality),
                     accurate=accurate,
                     on_progress=segment_progress,
                     cancel_token=cancel_token,

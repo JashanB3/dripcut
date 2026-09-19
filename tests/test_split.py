@@ -122,6 +122,21 @@ def test_output_name_pattern() -> None:
     assert segment.output_name("clip", ".mov", pattern="{stem}_{index}") == "clip_7.mov"
 
 
+def test_hosted_render_profile_uses_publishable_720p_dimensions(container, monkeypatch) -> None:
+    monkeypatch.setenv("DRIPCUT_RENDER_PROFILE", "720p")
+    assert container.split.output_size("portrait") == (720, 1280)
+    assert container.split.output_size("landscape") == (1280, 720)
+    assert container.split.output_size("square") == (720, 720)
+
+
+def test_hosted_encoder_profile_caps_fps_and_uses_fast_preset(container, monkeypatch) -> None:
+    monkeypatch.setenv("DRIPCUT_FFMPEG_PRESET", "veryfast")
+    monkeypatch.setenv("DRIPCUT_MAX_OUTPUT_FPS", "30")
+    settings = container.split.encode_settings("mp4", "balanced")
+    assert settings.preset == "veryfast"
+    assert settings.fps == 30
+
+
 def test_display_title_falls_back() -> None:
     assert Segment(start=0, end=1, index=3).display_title("show") == "show-03"
     assert Segment(start=0, end=1, index=3, title="Best bit").display_title("show") == "Best bit"

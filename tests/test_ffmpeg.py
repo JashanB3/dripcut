@@ -102,6 +102,14 @@ def test_production_software_encoder_limits_threads(monkeypatch) -> None:
     assert args[args.index("-threads") + 1] == "1"
 
 
+@needs_ffmpeg
+def test_runner_can_lower_ffmpeg_process_priority(monkeypatch) -> None:
+    monkeypatch.setenv("DRIPCUT_FFMPEG_NICE", "10")
+    result = FFmpegRunner("ffmpeg").run(["-version"], capture_stdout=True)
+    assert result.command[0].endswith("nice")
+    assert result.command[1:3] == ["-n", "10"]
+
+
 def test_videotoolbox_uses_quality_not_crf() -> None:
     args = EncodeSettings().build_args(video_encoder="h264_videotoolbox", has_audio=False)
     assert "-crf" not in args, "VideoToolbox takes -q:v, not -crf"

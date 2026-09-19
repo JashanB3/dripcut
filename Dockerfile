@@ -25,12 +25,30 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_RETRIES=5 \
     DRIPCUT_HOME=/var/lib/dripcut \
     DRIPCUT_OUTPUT=/var/lib/dripcut/output \
+    DRIPCUT_TEMP=/tmp/dripcut \
     DRIPCUT_ENV=production \
     DRIPCUT_AUTH_PROVIDER=supabase \
     DRIPCUT_TENANT_PROVIDER=supabase \
     DRIPCUT_AUTH_REQUIRED=1 \
     DRIPCUT_COOKIE_SECURE=1 \
     DRIPCUT_MAX_WORKERS=1 \
+    DRIPCUT_MAX_CONCURRENT_VIDEO_JOBS=1 \
+    DRIPCUT_FFMPEG_THREADS=1 \
+    DRIPCUT_FFMPEG_NICE=10 \
+    DRIPCUT_FFMPEG_PRESET=veryfast \
+    DRIPCUT_MAX_OUTPUT_FPS=30 \
+    DRIPCUT_MAX_UPLOAD_MB=512 \
+    DRIPCUT_MAX_VIDEO_DURATION_SECONDS=600 \
+    DRIPCUT_MIN_FREE_DISK_MB=1536 \
+    DRIPCUT_MAX_ACTIVE_JOBS_PER_USER=5 \
+    DRIPCUT_FFMPEG_TIMEOUT_SECONDS=1800 \
+    DRIPCUT_RENDER_PROFILE=720p \
+    DRIPCUT_MVP_PROFILE=1 \
+    DRIPCUT_CREATE_ZIP=0 \
+    DRIPCUT_ENABLE_AI_ANALYSIS=0 \
+    DRIPCUT_ENABLE_AI_THUMBNAILS=0 \
+    DRIPCUT_ENABLE_AUTO_CAPTIONS=0 \
+    DRIPCUT_ENABLE_INSTAGRAM=0 \
     DRIPCUT_TRANSCRIPTION_PROVIDER=groq
 
 RUN apt-get update \
@@ -47,11 +65,12 @@ COPY --from=node-runtime /opt/dripcut/bgutil/server /opt/dripcut/bgutil/server
 
 WORKDIR /app
 
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml requirements-server.txt README.md LICENSE ./
 COPY src ./src
 
 RUN python -m pip install --upgrade setuptools wheel \
-    && python -m pip install . \
+    && python -m pip install --requirement requirements-server.txt \
+    && python -m pip install --no-deps . \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin dripcut \
     && mkdir -p /var/lib/dripcut \
     && chown -R dripcut:dripcut /var/lib/dripcut

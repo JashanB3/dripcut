@@ -14,6 +14,7 @@ htmlcov/
 *.log
 .env
 .env.*
+!.env.worker.example
 !.env.example
 .envrc
 .direnv/

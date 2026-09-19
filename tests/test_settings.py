@@ -65,6 +65,7 @@ def test_corrupt_file_falls_back_to_defaults(paths) -> None:
     ("variable", "value", "attribute"),
     [
         ("DRIPCUT_PORT", "8080", lambda s: s.server.port),
+        ("DRIPCUT_MAX_UPLOAD_MB", "512", lambda s: s.server.max_upload_mb),
         ("DRIPCUT_THEME", "light", lambda s: s.ui.theme),
         ("DRIPCUT_OLLAMA_MODEL", "llama3", lambda s: s.ai.ollama_model),
         ("DRIPCUT_LOG_LEVEL", "DEBUG", lambda s: s.log_level),

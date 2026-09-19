@@ -23,6 +23,8 @@ __all__ = [
     "ExportError",
     "PluginError",
     "ProjectError",
+    "StorageCapacityError",
+    "JobTimeoutError",
 ]
 
 
@@ -72,6 +74,22 @@ class DependencyError(DripCutError):
 
     code = "DEPENDENCY_UNAVAILABLE"
     status_code = 503
+    retryable = True
+
+
+class StorageCapacityError(DripCutError):
+    """The worker cannot safely accept another disk-heavy operation."""
+
+    code = "STORAGE_CAPACITY_LOW"
+    status_code = 503
+    retryable = True
+
+
+class JobTimeoutError(DripCutError):
+    """A bounded production media operation exceeded its wall-clock budget."""
+
+    code = "JOB_TIMEOUT"
+    status_code = 504
     retryable = True
 
 

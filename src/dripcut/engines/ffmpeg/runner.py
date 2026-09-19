@@ -12,6 +12,7 @@ Design notes
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import threading
@@ -20,7 +21,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from dripcut.core.errors import DependencyError, FFmpegError
+from dripcut.core.errors import DependencyError, FFmpegError, JobTimeoutError
 from dripcut.core.logging import get_logger
 from dripcut.engines.ffmpeg.encoder import (
     CapabilityEncoderProvider,
@@ -213,6 +214,14 @@ class FFmpegRunner:
         """
         binary = self.resolve_binary()
         command = [binary, "-hide_banner", "-nostdin", "-loglevel", "error"]
+        configured_nice = os.environ.get("DRIPCUT_FFMPEG_NICE", "").strip()
+        nice_binary = shutil.which("nice") if configured_nice else None
+        if nice_binary:
+            try:
+                nice_value = max(0, min(19, int(configured_nice)))
+            except ValueError:
+                nice_value = 10
+            command = [nice_binary, "-n", str(nice_value), *command]
         if self.overwrite:
             command.append("-y")
         if not capture_stdout:
@@ -244,6 +253,22 @@ class FFmpegRunner:
         )
         stderr_thread.start()
 
+        timed_out = threading.Event()
+
+        def terminate_after_timeout() -> None:
+            timed_out.set()
+            self._terminate(process)
+
+        try:
+            timeout_seconds = max(
+                30, int(os.environ.get("DRIPCUT_FFMPEG_TIMEOUT_SECONDS", "1800"))
+            )
+        except ValueError:
+            timeout_seconds = 1800
+        timeout_timer = threading.Timer(timeout_seconds, terminate_after_timeout)
+        timeout_timer.daemon = True
+        timeout_timer.start()
+
         cancelled = False
         try:
             if capture_stdout:
@@ -261,9 +286,17 @@ class FFmpegRunner:
             self._terminate(process)
             raise
         finally:
+            timeout_timer.cancel()
             stderr_thread.join(timeout=2)
 
         stderr_tail = "\n".join(stderr_buffer).strip()
+
+        if timed_out.is_set():
+            self._cleanup(outputs)
+            raise JobTimeoutError(
+                "Video processing exceeded the production time limit.",
+                hint="Use a shorter source or fewer clips, then try again.",
+            )
 
         if cancelled or (cancel_token is not None and cancel_token.cancelled):
             self._cleanup(outputs)

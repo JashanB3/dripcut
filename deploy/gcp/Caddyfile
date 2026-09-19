@@ -1,0 +1,29 @@
+{$DRIPCUT_API_HOST} {
+    encode zstd gzip
+
+    @health path /api/health
+    handle @health {
+        reverse_proxy api:10000
+    }
+
+    handle {
+        reverse_proxy api:10000 {
+            transport http {
+                read_timeout 15m
+                write_timeout 15m
+            }
+        }
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
