@@ -1668,11 +1668,19 @@ def create_app(
     @app.get("/api/social/{platform}/callback", response_model=None)
     def finish_social_oauth(
         platform: Literal["youtube", "instagram"],
+        request: Request,
         code: str = Query(default="", max_length=4096),
         state: str = Query(default="", max_length=4096),
         error: str = Query(default="", max_length=200),
-        principal: Principal = principal_dependency,
     ) -> RedirectResponse:
+        # OAuth callbacks are normally reached in the same browser session that
+        # started the connection. A pasted callback URL has neither that session
+        # nor a valid one-time state, so return the user to the product instead
+        # of exposing a raw API authentication error.
+        try:
+            principal = current_principal(request)
+        except AuthProviderError:
+            return RedirectResponse(_frontend_url("/login"), status_code=303)
         if error:
             return RedirectResponse(
                 _frontend_url(f"/settings?social={platform}-denied"),

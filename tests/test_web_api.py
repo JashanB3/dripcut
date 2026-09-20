@@ -53,6 +53,19 @@ def test_health_reports_media_dependencies(container) -> None:
     assert response.json() == {"status": "ok", "ffmpeg": True, "ffprobe": True}
 
 
+def test_social_callback_without_session_returns_to_login(container) -> None:
+    app = create_app(build_service(container), require_auth=True)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/social/instagram/callback",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/login")
+
+
 def test_project_card_reconciles_an_interrupted_render(container) -> None:
     service = build_service(container)
     project = container.projects.create("Interrupted render")
