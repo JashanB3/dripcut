@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import threading
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
@@ -341,6 +344,54 @@ def create_app(
     rate_limiter = InMemoryRateLimiter(
         window_seconds=int(os.environ.get("DRIPCUT_RATE_LIMIT_WINDOW_SECONDS", "60"))
     )
+    # Active jobs are polled every second. Re-validating the same bearer token
+    # with GoTrue and then issuing the membership/profile queries for every poll
+    # added roughly one second to each production status response. Cache only
+    # already-validated principals, briefly and with a hard size bound. RLS
+    # remains the final authorization boundary for persistent data access.
+    principal_cache_ttl = max(
+        0.0, float(os.environ.get("DRIPCUT_PRINCIPAL_CACHE_TTL_SECONDS", "15"))
+    )
+    principal_cache_limit = max(
+        1, int(os.environ.get("DRIPCUT_PRINCIPAL_CACHE_MAX_ENTRIES", "512"))
+    )
+    principal_cache: OrderedDict[str, tuple[float, Principal]] = OrderedDict()
+    principal_cache_lock = threading.RLock()
+
+    def principal_cache_key(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def cached_principal(token: str) -> Principal | None:
+        if principal_cache_ttl <= 0:
+            return None
+        key = principal_cache_key(token)
+        now = time.monotonic()
+        with principal_cache_lock:
+            entry = principal_cache.get(key)
+            if entry is None:
+                return None
+            expires_at, principal = entry
+            if expires_at <= now:
+                principal_cache.pop(key, None)
+                return None
+            principal_cache.move_to_end(key)
+            return principal
+
+    def cache_principal(token: str, principal: Principal) -> None:
+        if principal_cache_ttl <= 0:
+            return
+        key = principal_cache_key(token)
+        with principal_cache_lock:
+            principal_cache[key] = (time.monotonic() + principal_cache_ttl, principal)
+            principal_cache.move_to_end(key)
+            while len(principal_cache) > principal_cache_limit:
+                principal_cache.popitem(last=False)
+
+    def invalidate_principal(token: str) -> None:
+        if not token:
+            return
+        with principal_cache_lock:
+            principal_cache.pop(principal_cache_key(token), None)
     development_session: AuthResult | None = None
     if not auth_is_required and auth.name == "local":
         try:
@@ -578,8 +629,13 @@ def create_app(
             raise AuthProviderError(
                 "Log in to continue.", status_code=401, code="AUTHENTICATION_REQUIRED"
             )
+        if principal := cached_principal(token):
+            request.state.user_id = principal.user.id
+            request.state.workspace_id = principal.workspace_id
+            return principal
         user = auth.get_user(token)
         principal = tenants.principal_for(user, token)
+        cache_principal(token, principal)
         request.state.user_id = principal.user.id
         request.state.workspace_id = principal.workspace_id
         return principal
@@ -746,6 +802,7 @@ def create_app(
     def logout(request: Request) -> Response:
         token = request.cookies.get(ACCESS_COOKIE, "")
         if token:
+            invalidate_principal(token)
             with suppress(AuthProviderError):
                 auth.logout(token)
         response = Response(status_code=204)
@@ -774,6 +831,7 @@ def create_app(
                 code="RESET_TOKEN_REQUIRED",
             )
         user = auth.reset_password(access_token=token, password=payload.password)
+        invalidate_principal(token)
         if payload.refresh_token:
             return auth_response(
                 auth.accept_external_tokens(

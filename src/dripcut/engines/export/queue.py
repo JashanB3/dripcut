@@ -280,6 +280,9 @@ class LocalJobQueue(JobQueue):
             self.cancel_all()
         self._executor.shutdown(wait=False, cancel_futures=cancel_pending)
         self._save_state()
+        flush = getattr(self.state_store, "flush", None)
+        if callable(flush) and not flush(timeout=10.0):
+            _log.warning("timed out flushing durable job state")
 
     def _run(self, job: Job) -> None:
         if job.cancel_token.cancelled:

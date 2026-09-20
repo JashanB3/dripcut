@@ -7,8 +7,10 @@ import logging
 import mimetypes
 import shutil
 import threading
+import time
 import uuid
 import zipfile
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import BinaryIO, Literal, Protocol
@@ -500,6 +502,16 @@ class ObjectJobStateStore(JobStateStore):
         self.cache_path = cache_path
         self.key = key
         self.local = JsonJobStateStore(cache_path)
+        self._remote_condition = threading.Condition()
+        self._pending_payload: bytes | None = None
+        self._requested_generation = 0
+        self._completed_generation = 0
+        self._remote_worker = threading.Thread(
+            target=self._sync_remote,
+            name="dripcut-job-state",
+            daemon=True,
+        )
+        self._remote_worker.start()
 
     def load(self) -> list[dict[str, object]]:
         if not self.cache_path.is_file():
@@ -514,14 +526,58 @@ class ObjectJobStateStore(JobStateStore):
         if not self.cache_path.is_file():
             return
         try:
-            self.storage.put_file(
-                self.key,
-                self.cache_path,
-                content_type="application/json",
-            )
-        except Exception:
-            logger.warning("could not persist durable job state", exc_info=True)
+            payload = self.cache_path.read_bytes()
+        except OSError:
+            logger.warning("could not read durable job state", exc_info=True)
+            return
+        # Coalesce lifecycle snapshots and upload them outside the queue lock.
+        # Synchronous R2 writes made job acceptance and terminal polling wait
+        # several seconds even though this snapshot is only a small JSON file.
+        with self._remote_condition:
+            self._requested_generation += 1
+            self._pending_payload = payload
+            self._remote_condition.notify()
 
     def save_local(self, jobs: list[dict[str, object]]) -> None:
         """Checkpoint live progress without a blocking object-store round trip."""
         self.local.save(jobs)
+
+    def flush(self, timeout: float = 10.0) -> bool:
+        """Wait for the latest queued object-store snapshot."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._remote_condition:
+            target = self._requested_generation
+            while self._completed_generation < target:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._remote_condition.wait(remaining)
+            return True
+
+    def _sync_remote(self) -> None:
+        upload_path = self.cache_path.with_suffix(f"{self.cache_path.suffix}.upload")
+        while True:
+            with self._remote_condition:
+                while self._pending_payload is None:
+                    self._remote_condition.wait()
+                payload = self._pending_payload
+                generation = self._requested_generation
+                self._pending_payload = None
+            try:
+                upload_path.parent.mkdir(parents=True, exist_ok=True)
+                upload_path.write_bytes(payload)
+                self.storage.put_file(
+                    self.key,
+                    upload_path,
+                    content_type="application/json",
+                )
+            except Exception:
+                logger.warning("could not persist durable job state", exc_info=True)
+            finally:
+                with suppress(OSError):
+                    upload_path.unlink(missing_ok=True)
+                with self._remote_condition:
+                    self._completed_generation = max(
+                        self._completed_generation, generation
+                    )
+                    self._remote_condition.notify_all()

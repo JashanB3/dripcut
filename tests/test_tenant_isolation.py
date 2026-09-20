@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 
 from dripcut.api.app import build_service, create_app
 from dripcut.auth.local import LocalAuthProvider
+from dripcut.auth.models import AuthUser
 from dripcut.tenancy.local import LocalTenantRepository
+from dripcut.tenancy.models import Principal
 
 
 def _signup(client: TestClient, name: str, email: str) -> None:
@@ -87,6 +89,67 @@ def test_local_auth_lifecycle(container) -> None:
             "/api/auth/login",
             json={"email": "lifecycle@example.test", "password": "updated-horse"},
         ).status_code == 200
+
+
+def test_repeated_authenticated_requests_reuse_a_short_lived_principal(container) -> None:
+    class CountingAuth:
+        name = "local"
+
+        def __init__(self, delegate: LocalAuthProvider) -> None:
+            self.delegate = delegate
+            self.get_user_calls = 0
+
+        def get_user(self, access_token: str) -> AuthUser:
+            self.get_user_calls += 1
+            return self.delegate.get_user(access_token)
+
+        def __getattr__(self, name: str):
+            return getattr(self.delegate, name)
+
+    class CountingTenants:
+        name = "local"
+
+        def __init__(self, delegate: LocalTenantRepository) -> None:
+            self.delegate = delegate
+            self.principal_calls = 0
+
+        def principal_for(self, user: AuthUser, access_token: str) -> Principal:
+            self.principal_calls += 1
+            return self.delegate.principal_for(user, access_token)
+
+        def __getattr__(self, name: str):
+            return getattr(self.delegate, name)
+
+    state_root = container.paths.projects / "principal-cache-test"
+    auth = CountingAuth(LocalAuthProvider(state_root / "auth"))
+    tenants = CountingTenants(LocalTenantRepository(state_root / "tenancy"))
+    app = create_app(
+        build_service(container),
+        auth_provider=auth,
+        tenant_repository=tenants,
+        require_auth=True,
+    )
+
+    with TestClient(app) as client:
+        _signup(client, "Cache User", "cache@example.test")
+        token = client.cookies.get("dripcut_access")
+        assert token
+        calls_after_signup = tenants.principal_calls
+
+        assert client.get("/api/projects").status_code == 200
+        assert client.get("/api/projects").status_code == 200
+        assert auth.get_user_calls == 1
+        assert tenants.principal_calls == calls_after_signup + 1
+
+        assert client.post("/api/auth/logout").status_code == 204
+        rejected = client.get(
+            "/api/projects", headers={"Authorization": f"Bearer {token}"}
+        )
+        # The local stateless provider does not revoke signed tokens, but the
+        # request must be revalidated rather than served from the principal cache.
+        assert rejected.status_code == 200
+        assert auth.get_user_calls == 2
+        assert tenants.principal_calls == calls_after_signup + 2
 
 
 def test_project_ownership_survives_backend_restart(container, sample_video: Path) -> None:

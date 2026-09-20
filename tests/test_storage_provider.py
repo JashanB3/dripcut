@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shutil
+import threading
+import time
 from io import BytesIO
 from pathlib import Path
 
@@ -107,6 +109,31 @@ def test_job_state_restores_from_object_storage_after_fresh_process(tmp_path: Pa
         assert restored.status is JobStatus.SUCCEEDED
     finally:
         second.shutdown()
+
+
+def test_object_job_state_upload_does_not_block_queue_updates(tmp_path: Path) -> None:
+    class BlockingStorage(LocalStorageProvider):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def put_file(self, key: str, source: Path, *, content_type: str = ""):
+            self.started.set()
+            assert self.release.wait(timeout=2)
+            return super().put_file(key, source, content_type=content_type)
+
+    provider = BlockingStorage(tmp_path / "objects")
+    store = ObjectJobStateStore(provider, tmp_path / "state" / "history.json")
+
+    started = time.monotonic()
+    store.save([{"id": "queued-job"}])
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.2
+    assert provider.started.wait(timeout=1)
+    provider.release.set()
+    assert store.flush(timeout=2)
 
 
 def test_s3_provider_uses_private_uploads_and_signed_downloads(tmp_path: Path) -> None:
