@@ -4,9 +4,9 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 412, height: 915 }
   test(`launch surface fits ${viewport.width}px screens`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "One video in. A week of content out." })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Paste the link. Skip the busywork." })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.getByRole("button", { name: "Start creating free" }).first().click();
+    await page.getByRole("button", { name: "Try DripCut free" }).first().click();
     await expect(page).toHaveURL(/\/signup$/);
     await page.getByLabel("Name").fill("Mobile QA");
     await page.getByLabel("Email").fill(`mobile-${viewport.width}-${Date.now()}@example.test`);

@@ -88,6 +88,7 @@ export function ProductShell({
       <section className="product-main">
         <header className="product-topbar">
           <div className="product-search"><span>Your private video studio</span></div>
+          <strong className="mobile-product-brand" aria-hidden="true">DripCut</strong>
           <div className="product-topbar__spacer" />
           <span className="local-pill">{user.name}</span>
           <button className="topbar-avatar" onClick={() => onUtilityPanel("account")} aria-label="Open account menu">{initial}</button>
