@@ -1013,7 +1013,7 @@ export async function saveSchedule(input: {
       privacy: input.privacy,
       timezone: input.timezone,
     }),
-  });
+  }, 60_000);
   return scheduleFromPayload(payload);
 }
 
