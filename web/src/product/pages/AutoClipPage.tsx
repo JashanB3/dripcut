@@ -1,7 +1,7 @@
-import { ArrowLeft, Check, Sparkles } from "lucide-react";
+import { ArrowLeft, Check, LoaderCircle, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { createClipJob, findViralMoments, getProject, importYouTube, uploadSource } from "../api/client";
+import { createClipJob, findViralMoments, getClipJob, getProject, importYouTube, uploadSource } from "../api/client";
 import { ClipControls } from "../components/ClipControls";
 import { ClipResults } from "../components/ClipResults";
 import { CustomerError } from "../components/CustomerError";
@@ -25,6 +25,9 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
   const [job, setJob] = useState<ApiJob | null>(null);
   const [starting, setStarting] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [restoringProject, setRestoringProject] = useState(
+    () => Boolean(window.localStorage.getItem("dripcut.activeProjectId")),
+  );
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const acceptSource = (source: SourceAsset, file?: File) => {
@@ -77,12 +80,37 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
     }
     const projectId = window.localStorage.getItem("dripcut.activeProjectId");
     if (!projectId) return;
-    window.localStorage.removeItem("dripcut.activeProjectId");
-    void getProject(projectId)
-      .then((project) => {
-        if (project.source) acceptSource(project.source);
-      })
-      .catch(() => undefined);
+    let active = true;
+    void (async () => {
+      try {
+        const project = await getProject(projectId);
+        if (!active) return;
+        if (!project.source) throw new Error("This saved project no longer has an available source video.");
+
+        setRuntime({ id: project.source.id, url: project.source.mediaUrl });
+        dispatch({ type: "source-loaded", source: project.source });
+
+        if (project.latestJobId) {
+          const restoredJob = await getClipJob(project.latestJobId);
+          if (!active) return;
+          setJob(restoredJob);
+          const hasFinishedClips = restoredJob.artifacts.some((artifact) => artifact.kind === "clip");
+          if (restoredJob.status === "succeeded" && hasFinishedClips) {
+            dispatch({ type: "show-results" });
+          } else if (restoredJob.status !== "succeeded") {
+            dispatch({ type: "preview-render" });
+          }
+        }
+      } catch (error) {
+        if (active) setSourceError(error);
+      } finally {
+        window.localStorage.removeItem("dripcut.activeProjectId");
+        if (active) setRestoringProject(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const reset = () => {
@@ -158,7 +186,14 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
         </div>
       </header>
       {sourceError !== null && <CustomerError error={sourceError} fallback="This clipping action could not be completed." />}
-      {state.phase === "source" && <SourcePicker onFile={(file) => void loadFile(file)} onYouTube={(url, rightsConfirmed) => void loadYouTube(url, rightsConfirmed)} busy={sourceBusy} progress={uploadProgress} stage={sourceStage} youtubeFailed={failedSourceKind === "youtube" && sourceError !== null} />}
+      {state.phase === "source" && restoringProject && (
+        <section className="source-step project-restore-state" role="status">
+          <LoaderCircle className="spin" size={30} />
+          <strong>Restoring your saved project…</strong>
+          <span>Loading the source and latest completed clips.</span>
+        </section>
+      )}
+      {state.phase === "source" && !restoringProject && <SourcePicker onFile={(file) => void loadFile(file)} onYouTube={(url, rightsConfirmed) => void loadYouTube(url, rightsConfirmed)} busy={sourceBusy} progress={uploadProgress} stage={sourceStage} youtubeFailed={failedSourceKind === "youtube" && sourceError !== null} />}
       {state.phase === "configure" && runtime && (
         <>
           <button className="workflow-back" onClick={reset}><ArrowLeft size={16} /> Change source</button>

@@ -387,6 +387,8 @@
 .workflow-steps span[data-active="true"] i { background: var(--dc-accent); border-color: var(--dc-accent); color: white; }
 .workflow-steps span[data-complete="true"] i { background: var(--dc-lime); border-color: var(--dc-lime); color: #26300d; }
 .source-step { background: white; border: 1px solid var(--dc-border-subtle); border-radius: 20px; margin: 15px auto; max-width: 980px; padding: 35px 44px 26px; }
+.project-restore-state { align-items: center; color: var(--dc-text-2); display: flex; flex-direction: column; gap: 10px; justify-content: center; min-height: 360px; text-align: center; }
+.project-restore-state strong { color: var(--dc-text-1); font-size: 22px; }
 .source-step__intro { text-align: center; }
 .source-step__intro h1 { font-size: clamp(30px, 3vw, 43px); letter-spacing: -0.05em; margin: 7px 0 8px; }
 .source-step__intro p { color: var(--dc-text-2); line-height: 1.55; margin: 0 auto; max-width: 650px; }

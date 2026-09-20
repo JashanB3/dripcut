@@ -7,6 +7,7 @@ import {
   fetchProjectContentSources,
   fetchProviderCapabilities,
   fetchUsage,
+  getProject,
   parseApiResponse,
   requestJson,
 } from "./client";
@@ -126,6 +127,49 @@ describe("createClipJob", () => {
       fast_mode: true,
       auto_captions: true,
       caption_style: "clean",
+    });
+  });
+});
+
+describe("getProject", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("restores the source and latest render needed to reopen a saved project", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      id: "project-1",
+      title: "Saved project",
+      project_type: "auto_clip",
+      source_asset_id: "source-1",
+      created_at: 1,
+      updated_at: 2,
+      status: "completed",
+      platform: "youtube",
+      output_format: "portrait",
+      clip_count: 1,
+      artifact_ids: ["artifact-1"],
+      scheduling_status: "not_scheduled",
+      latest_job_id: "job-1",
+      captions_enabled: false,
+      workflow_route: "auto-clip",
+      source: {
+        id: "source-1",
+        filename: "source.mp4",
+        media_url: "/api/sources/source-1/media",
+        duration: 65,
+        width: 1280,
+        height: 720,
+        size: 1024,
+      },
+    })));
+
+    await expect(getProject("project-1")).resolves.toMatchObject({
+      id: "project-1",
+      latestJobId: "job-1",
+      source: {
+        id: "source-1",
+        mediaUrl: "/api/sources/source-1/media",
+        duration: 65,
+      },
     });
   });
 });
