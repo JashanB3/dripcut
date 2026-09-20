@@ -497,6 +497,11 @@ class VideoEngine:
                 args += ["-map", "0:a?"]
         else:
             graph = FilterGraph()
+            # Drop surplus frames before scaling/cropping.  YouTube commonly
+            # offers 60-fps sources while the hosted output is 30 fps; applying
+            # only output `-r` made FFmpeg scale twice as many frames as needed.
+            if config.fps and info.fps > config.fps:
+                graph.add(f"fps={config.fps:g}")
             if resize:
                 graph.extend(scale_filter(resize[0], resize[1], mode=ScaleMode.FILL))
             elif profile == "portrait":

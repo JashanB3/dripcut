@@ -15,15 +15,20 @@ export function RenderProgress({ job, onUpdate, onComplete, onBack }: {
     let active = true;
     let timer: number | undefined;
     const poll = async () => {
+      const startedAt = Date.now();
+      let terminal = false;
       try {
         const latest = await getClipJob(job.id);
         if (!active) return;
         onUpdate(latest);
         if (latest.status === "succeeded") onComplete(latest);
+        terminal = latest.status === "succeeded" || latest.status === "failed" || latest.status === "cancelled";
       } catch {
         // A brief API restart should not discard the render already running.
       } finally {
-        if (active) timer = window.setTimeout(() => void poll(), 1_500);
+        // Keep status-to-screen lag under two seconds without overlapping calls.
+        const delay = Math.max(0, 1_000 - (Date.now() - startedAt));
+        if (active && !terminal) timer = window.setTimeout(() => void poll(), delay);
       }
     };
     void poll();

@@ -521,3 +521,7 @@ class ObjectJobStateStore(JobStateStore):
             )
         except Exception:
             logger.warning("could not persist durable job state", exc_info=True)
+
+    def save_local(self, jobs: list[dict[str, object]]) -> None:
+        """Checkpoint live progress without a blocking object-store round trip."""
+        self.local.save(jobs)

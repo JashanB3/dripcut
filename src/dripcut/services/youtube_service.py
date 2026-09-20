@@ -33,13 +33,15 @@ __all__ = [
 
 _log = get_logger("services.youtube")
 _MP4_FORMAT = (
-    "bv*[height<=1080][vcodec^=avc1][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/"
-    "b[height<=1080][vcodec^=avc1][ext=mp4]/"
-    "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/"
-    "b[height<=1080][ext=mp4]/"
-    "bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]/best"
+    "bv*[height<=720][vcodec^=avc1][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/"
+    "b[height<=720][vcodec^=avc1][ext=mp4]/"
+    "bv*[height<=720][ext=mp4]+ba[ext=m4a]/"
+    "b[height<=720][ext=mp4]/"
+    "bv*[height<=720]+ba/b[height<=720]/best[height<=720]/best"
 )
-_HLS_FORMAT = "b[protocol^=m3u8][height<=1080]/b[height<=1080]/best[height<=1080]/best"
+_HLS_FORMAT = (
+    "b[protocol^=m3u8][height<=720]/b[height<=720]/best[height<=720]/best"
+)
 _URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
 _HTTP_STATUS_PATTERN = re.compile(r"(?:HTTP(?: Error)?|status(?: code)?)\D{0,12}(\d{3})", re.IGNORECASE)
 _SENSITIVE_DETAIL_PATTERN = re.compile(
@@ -454,6 +456,11 @@ class YouTubeImportService:
 
     def select_strategy(self) -> list[_ExtractionStrategy]:
         strategies: list[_ExtractionStrategy] = []
+        # A configured operator cookie jar is the only strategy that consistently
+        # works from the production GCE region.  Trying four known-blocked public
+        # clients first added roughly a minute to every successful import.
+        if self._cookie_file() is not None:
+            strategies.append(_ExtractionStrategy("authenticated_cookie", use_cookies=True))
         provider_available = _distribution_version("bgutil-ytdlp-pot-provider") is not None
         provider_mode = self._pot_provider_mode()
         if provider_available and provider_mode:
@@ -470,8 +477,11 @@ class YouTubeImportService:
             _ExtractionStrategy("web_safari_hls", player_client="web_safari", use_hls=True)
         )
         strategies.append(_ExtractionStrategy("recommended"))
-        if self._cookie_file() is not None:
-            strategies.append(_ExtractionStrategy("authenticated_cookie", use_cookies=True))
+        # Prefer the last successful path for subsequent imports in this process.
+        with self._state_lock:
+            preferred = self._state.last_successful_strategy
+        if preferred:
+            strategies.sort(key=lambda strategy: strategy.name != preferred)
         return strategies
 
     @staticmethod

@@ -380,7 +380,11 @@ class LocalJobQueue(JobQueue):
             if not job.status.is_terminal and now - last < self._progress_persist_interval:
                 return
             self._last_persisted[job.id] = now
-            self._save_state_locked()
+            # Progress is written to the local durable volume on every interval.
+            # Remote object storage is updated for lifecycle transitions, not
+            # while FFmpeg is saturating the VM; synchronous R2 uploads here used
+            # to hold the queue lock and make every status poll take 1-4 seconds.
+            self._save_state_locked(remote=job.status.is_terminal)
 
     def _load_state(self) -> None:
         recovered = False
@@ -411,7 +415,7 @@ class LocalJobQueue(JobQueue):
         with self._lock:
             self._save_state_locked()
 
-    def _save_state_locked(self) -> None:
+    def _save_state_locked(self, *, remote: bool = True) -> None:
         ordered = [
             self._jobs[job_id].to_dict()
             for job_id in self._order
@@ -419,4 +423,8 @@ class LocalJobQueue(JobQueue):
         ]
         if len(ordered) > self._history_limit:
             ordered = ordered[-self._history_limit :]
-        self.state_store.save(ordered)
+        save_local = getattr(self.state_store, "save_local", None)
+        if not remote and callable(save_local):
+            save_local(ordered)
+        else:
+            self.state_store.save(ordered)

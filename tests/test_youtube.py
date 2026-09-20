@@ -128,7 +128,7 @@ def test_import_returns_verified_video_metadata_and_progress(paths, monkeypatch)
     assert progress[-1] == (1.0, "Ready")
     assert any(stage == "Downloading video" for _, stage in progress)
     assert options_seen[-1]["js_runtimes"] == {"node": {"path": "/bin/node"}}
-    assert "height<=1080" in str(options_seen[-1]["format"])
+    assert "height<=720" in str(options_seen[-1]["format"])
 
 
 def test_http_403_retries_from_web_embedded_to_hls(paths, monkeypatch) -> None:
@@ -205,7 +205,7 @@ def test_strategy_order_remains_bounded_after_a_success(paths, monkeypatch) -> N
     service.import_video("https://youtu.be/def456")
 
     assert attempted[:first_import_attempts] == ["web_embedded", "web_safari"]
-    assert attempted[first_import_attempts:] == ["web_embedded", "web_safari"]
+    assert attempted[first_import_attempts:] == ["web_safari"]
 
 
 def test_web_safari_hls_is_used_after_direct_clients_fail(paths, monkeypatch) -> None:
@@ -304,14 +304,14 @@ def test_strategy_order_includes_configured_pot_and_cookie_fallback(paths, monke
     strategies = service.select_strategy()
 
     assert [strategy.name for strategy in strategies] == [
+        "authenticated_cookie",
         "mweb_pot",
         "web_embedded",
         "web_safari_hls",
         "recommended",
-        "authenticated_cookie",
     ]
-    pot_options = service._options(strategies[0], "job", paths.temp / "pot", None)
-    cookie_options = service._options(strategies[-1], "job", paths.temp / "cookie", None)
+    pot_options = service._options(strategies[1], "job", paths.temp / "pot", None)
+    cookie_options = service._options(strategies[0], "job", paths.temp / "cookie", None)
     assert pot_options["extractor_args"] == {
         "youtube": {"player_client": ["mweb"]},
         "youtubepot-bgutilhttp": {"base_url": ["http://127.0.0.1:4416"]},
@@ -389,7 +389,7 @@ def test_render_secret_cookie_alias_is_supported(paths, monkeypatch) -> None:
     service = YouTubeService(paths, sleep=lambda _seconds: None)
 
     assert service.diagnostics().cookie_fallback_configured is True
-    assert service.select_strategy()[-1].name == "authenticated_cookie"
+    assert service.select_strategy()[0].name == "authenticated_cookie"
 
 
 def test_diagnostics_report_capabilities_without_secret_paths(paths, monkeypatch) -> None:

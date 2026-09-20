@@ -1,6 +1,7 @@
-import { Youtube } from "lucide-react";
+import { Minus, Plus, Youtube } from "lucide-react";
 
 import {
+  maximumClipCount,
   selectedDuration,
   selectedSegments,
   type AutoClipAction,
@@ -11,6 +12,7 @@ import type { ClipDuration } from "../models";
 const durationOptions: ClipDuration[] = [15, 30, 45, 60, "custom"];
 export function ClipControls({ state, dispatch, onCreate, starting }: { state: AutoClipState; dispatch: (action: AutoClipAction) => void; onCreate: () => void; onToggleAI: () => void; starting: boolean; aiBusy: boolean }) {
   const segments = selectedSegments(state);
+  const max = maximumClipCount(state);
   const clipLabel = segments.length === 1 ? "clip" : "clips";
 
   return (
@@ -19,6 +21,15 @@ export function ClipControls({ state, dispatch, onCreate, starting }: { state: A
         <span className="eyebrow">Clip plan</span>
         <h2>Two choices. That’s it.</h2>
         <p>Sequential equal clips are the default.</p>
+      </div>
+      <div className="control-group">
+        <div className="control-label"><strong>Number of clips</strong><span>Up to {max} clips</span></div>
+        <div className="clip-stepper">
+          <button aria-label="Remove one clip" disabled={state.count <= 1} onClick={() => dispatch({ type: "set-count", value: state.count - 1 })}><Minus size={18} /></button>
+          <strong>{state.count}</strong>
+          <button aria-label="Add one clip" disabled={state.count >= max} onClick={() => dispatch({ type: "set-count", value: state.count + 1 })}><Plus size={18} /></button>
+          <button className="max-button" disabled={max === 0 || state.count === max} onClick={() => dispatch({ type: "use-max" })}>MAX</button>
+        </div>
       </div>
       <div className="control-group">
         <div className="control-label"><strong>Clip duration</strong><span>{selectedDuration(state)} seconds</span></div>
@@ -45,7 +56,7 @@ export function ClipControls({ state, dispatch, onCreate, starting }: { state: A
       </div>
       <div className="clip-plan-summary">
         <span>Sequential</span>
-        <strong>{segments.length} {clipLabel} · {Math.round(segments.reduce((sum, item) => sum + item.duration, 0))} seconds · portrait</strong>
+        <strong>{segments.length} of {max} {clipLabel} · {Math.round(segments.reduce((sum, item) => sum + item.duration, 0))} seconds · portrait</strong>
       </div>
       {segments.length === 0 && <p className="clip-count-warning">Choose a shorter duration to create a clip.</p>}
       <button className="create-clips-preview" disabled={segments.length === 0 || starting} onClick={onCreate}>{starting ? "Starting render…" : `Create ${segments.length} ${clipLabel}`}</button>

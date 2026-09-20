@@ -22,6 +22,7 @@ from dripcut.engines.ai.provider import (
     ViralMoment,
     ViralMomentAnalysis,
 )
+from dripcut.models.job import Job, JobKind, JobStatus
 from dripcut.models.transcript import Transcript, TranscriptSegment
 from dripcut.services.youtube_service import (
     YouTubeImportError,
@@ -50,6 +51,22 @@ def test_health_reports_media_dependencies(container) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "ffmpeg": True, "ffprobe": True}
+
+
+def test_project_card_reconciles_an_interrupted_render(container) -> None:
+    service = build_service(container)
+    project = container.projects.create("Interrupted render")
+    project.status = "processing"
+    interrupted = Job(kind=JobKind.SPLIT, title="Interrupted")
+    interrupted.status = JobStatus.FAILED
+    interrupted.metadata["error_code"] = "WORKER_RESTARTED"
+    project.latest_job_id = interrupted.id
+    container.projects.save(project)
+    service.jobs = SimpleNamespace(get=lambda job_id: interrupted if job_id == interrupted.id else None)
+
+    payload = next(item for item in service.list_projects() if item.id == project.id)
+
+    assert payload.status == "failed"
 
 
 def test_upload_rejected_when_worker_disk_is_below_floor(container, monkeypatch) -> None:

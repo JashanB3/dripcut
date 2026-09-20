@@ -130,7 +130,7 @@ export function autoClipReducer(state: AutoClipState, action: AutoClipAction): A
         currentTime: 0,
         playing: false,
         renderStage: 0,
-        count: Math.max(0, Math.ceil(action.source.duration / selectedDuration(state))),
+        count: Math.min(5, Math.max(1, Math.ceil(action.source.duration / selectedDuration(state)))),
       };
     case "apply-template":
       return {
@@ -145,11 +145,11 @@ export function autoClipReducer(state: AutoClipState, action: AutoClipAction): A
       };
     case "set-duration": {
       const next = { ...state, durationChoice: action.value };
-      return { ...next, count: maximumClipCount(next) };
+      return { ...next, count: Math.max(1, clampCount(next, next.count)) };
     }
     case "set-custom-duration": {
       const next = { ...state, customDuration: Math.max(5, Math.min(300, action.value)) };
-      return { ...next, count: maximumClipCount(next) };
+      return { ...next, count: Math.max(1, clampCount(next, next.count)) };
     }
     case "set-count":
       return { ...state, count: clampCount(state, action.value) };

@@ -45,7 +45,16 @@ describe("autoClipReducer", () => {
 
     expect(state.count).toBe(1);
     state = autoClipReducer(state, { type: "set-duration", value: 15 });
-    expect(state.count).toBe(2);
-    expect(selectedSegments(state)[1]).toMatchObject({ start: 15, end: 18 });
+    expect(state.count).toBe(1);
+    expect(selectedSegments(state)[0]).toMatchObject({ start: 0, end: 15 });
+  });
+
+  it("defaults long sources to five clips and preserves the choice across durations", () => {
+    let state = autoClipReducer(initialAutoClipState, { type: "source-loaded", source });
+    expect(state.count).toBe(5);
+    state = autoClipReducer(state, { type: "set-count", value: 3 });
+    state = autoClipReducer(state, { type: "set-duration", value: 60 });
+    expect(state.count).toBe(3);
+    expect(selectedSegments(state)).toHaveLength(3);
   });
 });

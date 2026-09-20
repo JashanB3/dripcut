@@ -805,9 +805,10 @@ class WebClipService:
                                 stage: str,
                                 clip_position: int = position,
                             ) -> None:
+                                clean_stage = stage.removeprefix("Clip 1 of 1 · ")
                                 progress_callback(
                                     ((clip_position - 1) + value) / total,
-                                    f"Clip {clip_position} of {total} · {stage}",
+                                    f"Clip {clip_position} of {total} · {clean_stage}",
                                 )
 
                             rendered = self.container.split.render(
@@ -1415,6 +1416,11 @@ class WebClipService:
                     break
             except ValidationError:
                 continue
+        resolved_status = summary.status
+        if summary.latest_job_id and summary.status in {"processing", "importing"}:
+            latest = self.jobs.get(summary.latest_job_id)
+            if latest is not None and latest.status.value in {"failed", "cancelled"}:
+                resolved_status = latest.status.value
         return ProjectResponse(
             id=summary.id,
             title=summary.name,
@@ -1423,7 +1429,7 @@ class WebClipService:
             thumbnail_url=thumbnail_url,
             created_at=summary.created_at,
             updated_at=summary.updated_at,
-            status=summary.status,
+            status=resolved_status,
             platform=summary.platform,
             output_format=summary.output_format,
             clip_count=summary.clip_count,
