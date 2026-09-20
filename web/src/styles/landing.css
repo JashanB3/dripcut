@@ -1,4 +1,4 @@
-.landing-page { background: #fbfbfd; color: #14151d; min-height: 100%; overflow-x: hidden; overflow-y: auto; scroll-behavior: smooth; }
+.landing-page { -webkit-overflow-scrolling: touch; background: #fbfbfd; color: #14151d; height: 100%; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; scroll-behavior: smooth; }
 .landing-page button, .landing-page a { -webkit-tap-highlight-color: transparent; }
 .landing-nav { align-items: center; display: grid; gap: 28px; grid-template-columns: auto 1fr auto; height: 76px; margin: 0 auto; max-width: 1420px; padding: 0 clamp(22px, 4vw, 64px); position: relative; z-index: 20; }
 .landing-brand { align-items: center; background: transparent; cursor: pointer; display: inline-flex; gap: 9px; }
