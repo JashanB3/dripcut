@@ -949,6 +949,26 @@ def create_app(
             external_url=source.youtube_url,
         )
 
+    def accessible_source(principal: Principal, source_id: str) -> SourceAssetResponse:
+        """Return a source after repairing a missing tenant index entry safely.
+
+        A remote acquisition finalizes its source and project independently of the
+        browser's job poll.  If the browser observes the completed acquisition in
+        the small window before the source index is visible through PostgREST,
+        authenticate access via the source's owning project and recreate the
+        index.  This never grants access based on a caller-supplied source ID:
+        the project remains the authorization boundary.
+        """
+        try:
+            tenants.require_access(principal, "source", source_id)
+        except TenantAccessDenied as source_error:
+            source = clip_service.source_response(source_id)
+            if not source.project_id:
+                raise source_error
+            tenants.require_access(principal, "project", source.project_id)
+            register_source(principal, source)
+        return clip_service.source_response(source_id)
+
     def register_job(principal: Principal, job: JobResponse) -> None:
         if job.project_id:
             project = clip_service.get_project(job.project_id)
@@ -1563,8 +1583,7 @@ def create_app(
                 "AI editing is disabled in the production MVP.",
                 hint="Use sequential clipping instead.",
             )
-        tenants.require_access(principal, "source", payload.source_id)
-        source = clip_service.source_response(payload.source_id)
+        source = accessible_source(principal, payload.source_id)
         reservation = usage.reserve_many(
             principal,
             [UsageRequest("ai_editor_actions", 1)],
@@ -1592,8 +1611,7 @@ def create_app(
                 "AI viral-moment detection is disabled in the production MVP.",
                 hint="Use sequential clipping instead.",
             )
-        tenants.require_access(principal, "source", source_id)
-        source = clip_service.source_response(source_id)
+        source = accessible_source(principal, source_id)
         reservation = usage.reserve_many(
             principal,
             [
@@ -1780,8 +1798,7 @@ def create_app(
         source_id: str,
         principal: Principal = principal_dependency,
     ) -> SourceAssetResponse:
-        tenants.require_access(principal, "source", source_id)
-        return clip_service.source_response(source_id)
+        return accessible_source(principal, source_id)
 
     @app.post("/api/sources/{source_id}/standard-plan", response_model=StandardPlanResponse)
     def standard_plan(
@@ -1789,7 +1806,7 @@ def create_app(
         payload: StandardPlanRequest,
         principal: Principal = principal_dependency,
     ) -> StandardPlanResponse:
-        tenants.require_access(principal, "source", source_id)
+        accessible_source(principal, source_id)
         return clip_service.standard_plan(source_id, payload)
 
     @app.get("/api/sources/{source_id}/media")
@@ -1797,7 +1814,7 @@ def create_app(
         source_id: str,
         principal: Principal = principal_dependency,
     ) -> FileResponse:
-        tenants.require_access(principal, "source", source_id)
+        accessible_source(principal, source_id)
         source = clip_service.get_source(source_id)
         return FileResponse(source.path, media_type=source.mime_type, filename=None)
 
@@ -1806,7 +1823,7 @@ def create_app(
         source_id: str,
         principal: Principal = principal_dependency,
     ) -> FileResponse:
-        tenants.require_access(principal, "source", source_id)
+        accessible_source(principal, source_id)
         source = clip_service.get_source(source_id)
         if not source.poster_path or not Path(source.poster_path).is_file():
             from dripcut.core.errors import ValidationError
@@ -1823,7 +1840,7 @@ def create_app(
         ] = None,
         principal: Principal = principal_dependency,
     ) -> JobResponse:
-        tenants.require_access(principal, "source", payload.source_id)
+        source = accessible_source(principal, payload.source_id)
         scoped_key = (
             f"{principal.workspace_id}:clips:{idempotency_key}"
             if idempotency_key
@@ -1832,7 +1849,6 @@ def create_app(
         if scoped_key and (existing := clip_service.idempotent_job(scoped_key)):
             background_tasks.add_task(register_job, principal, existing)
             return existing
-        source = clip_service.source_response(payload.source_id)
         requests = [
             UsageRequest(
                 "video_processing_minutes",

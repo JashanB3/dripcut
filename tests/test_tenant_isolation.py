@@ -193,6 +193,39 @@ def test_project_ownership_survives_backend_restart(container, sample_video: Pat
         assert [project["id"] for project in projects.json()] == [project_id]
 
 
+def test_source_request_repairs_a_missing_source_tenant_index(container, sample_video: Path) -> None:
+    """A completed remote import must remain usable if its source index lags."""
+    state_root = container.paths.projects / "source-index-recovery-test"
+    tenants = LocalTenantRepository(state_root / "tenancy")
+    app = create_app(
+        build_service(container),
+        auth_provider=LocalAuthProvider(state_root / "auth"),
+        tenant_repository=tenants,
+        require_auth=True,
+    )
+
+    with TestClient(app) as client:
+        _signup(client, "Recovery User", "recovery@example.test")
+        with sample_video.open("rb") as source:
+            uploaded = client.post(
+                "/api/sources/upload",
+                files={"video": ("recovery.mp4", source, "video/mp4")},
+            )
+        assert uploaded.status_code == 201, uploaded.text
+        source_id = uploaded.json()["id"]
+
+        # Simulate the short interval after a worker reports success but before
+        # its durable source index is visible to the web request.
+        data = tenants._read()
+        del data["resources"][f"source:{source_id}"]
+        tenants._write(data)
+
+        recovered = client.get(f"/api/sources/{source_id}")
+
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["id"] == source_id
+
+
 def test_cross_workspace_project_and_artifact_access_is_denied(
     container, sample_video: Path
 ) -> None:
