@@ -16,8 +16,8 @@ import { useState } from "react";
 import { navigatePath } from "../../auth/authState";
 
 const capabilities = [
-  [Scissors, "Auto Clip", "Choose a duration and count. AI is never required."],
-  [Sparkles, "Viral Moments", "Find strong hooks and complete ideas with platform-aware AI."],
+  [Scissors, "Make the cut", "Choose a duration and count. AI is never required."],
+  [Sparkles, "Find the moment", "Optionally review AI suggestions for strong hooks and complete ideas."],
   [Captions, "Smart Captions", "Readable, centered captions sized for vertical screens."],
   [Scissors, "Three formats", "Create portrait, landscape, or square clips from one source."],
 ] as const;
@@ -46,6 +46,7 @@ const faqs = [
 export function LandingPage({ signedIn }: { signedIn: boolean }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const start = () => navigatePath(signedIn ? "/home" : "/signup");
+  const closeMenu = () => setMenuOpen(false);
 
   return (
     <div className="landing-page">
@@ -53,11 +54,11 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
         <button className="landing-brand" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>
           <span>dc</span><strong>DripCut</strong>
         </button>
-        <button className="landing-menu" onClick={() => setMenuOpen((value) => !value)} aria-label="Toggle navigation">
+        <button className="landing-menu" onClick={() => setMenuOpen((value) => !value)} aria-label="Toggle navigation" aria-expanded={menuOpen} aria-controls="landing-navigation">
           {menuOpen ? <X /> : <Menu />}
         </button>
-        <nav data-open={menuOpen}>
-          <a href="#product">Product</a><a href="#workflow">How it works</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a>
+        <nav id="landing-navigation" data-open={menuOpen}>
+          <a href="#product" onClick={closeMenu}>Product</a><a href="#workflow" onClick={closeMenu}>How it works</a><a href="#pricing" onClick={closeMenu}>Pricing</a><a href="#faq" onClick={closeMenu}>FAQ</a>
         </nav>
         <div className="landing-auth-actions">
           {!signedIn && <button onClick={() => navigatePath("/login")}>Log in</button>}
@@ -70,7 +71,7 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
           <div className="landing-hero__copy">
             <span className="landing-pill"><Sparkles size={14} /> Built for a consistent creator workflow</span>
             <h1><span>One video in.</span><br />A week of content out.</h1>
-            <p>Turn long videos into ready-to-post Shorts and Reels with smart clipping, captions and optional AI viral moments.</p>
+            <p>Turn long videos into ready-to-post Shorts and Reels. Make the cuts yourself, add captions, or use optional AI suggestions when you want a second set of eyes.</p>
             <div className="landing-hero__actions">
               <button className="landing-gradient-button" onClick={start}>Start creating free <ArrowRight size={17} /></button>
               <a href="#product"><Play size={16} fill="currentColor" /> See it in action</a>
@@ -85,7 +86,7 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
         </section>
 
         <section className="landing-section landing-product" id="product">
-          <SectionHeading eyebrow="The complete loop" title="From raw recording to finished clips." body="DripCut keeps the essentials in one focused workspace. Choose your cuts, add captions, and download clips ready to share." />
+          <SectionHeading eyebrow="The complete loop" title="From raw recording to finished clips." body="DripCut keeps the essentials in one focused workspace. Choose the moments, add captions, then download or schedule clips ready to share." />
           <div className="landing-capability-grid">
             {capabilities.map(([Icon, title, body], index) => <article key={title} style={{ "--delay": `${index * 55}ms` } as React.CSSProperties}><span><Icon size={21} /></span><h3>{title}</h3><p>{body}</p></article>)}
           </div>

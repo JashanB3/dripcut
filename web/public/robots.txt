@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://dripcut.onrender.com/sitemap.xml
