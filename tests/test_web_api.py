@@ -69,6 +69,44 @@ def test_project_card_reconciles_an_interrupted_render(container) -> None:
     assert payload.status == "failed"
 
 
+def test_completed_job_is_recovered_from_durable_project_artifacts(container, tmp_path) -> None:
+    service = build_service(container)
+    job_id = "11111111-1111-4111-8111-111111111111"
+    source_id = "22222222-2222-4222-8222-222222222222"
+    project = container.projects.create("Recovered render")
+    project.status = "completed"
+    project.source_asset_id = source_id
+    project.latest_job_id = job_id
+    clip_path = tmp_path / "clip-01.mp4"
+    clip_path.write_bytes(b"durable clip")
+    clip = service.artifacts.register_clip(
+        job_id,
+        clip_path,
+        index=1,
+        duration=15,
+        output_format="portrait",
+    )
+    project.artifact_ids = [clip.id]
+    container.projects.save(project)
+
+    recovered = service.job_response(job_id)
+
+    assert recovered.status == "succeeded"
+    assert recovered.project_id == project.id
+    assert recovered.source_id == source_id
+    assert recovered.percent == 100
+    assert [item.id for item in recovered.artifacts] == [clip.id]
+
+
+def test_hosted_queue_uses_history_separate_from_desktop_queue(container) -> None:
+    service = build_service(container)
+    web_queue = service.jobs.queue
+
+    assert web_queue.history_file == container.paths.projects / "web" / "jobs.json"
+    assert web_queue.history_file != container.paths.history_file
+    assert web_queue.state_store.key == "metadata/queue/web-jobs.json"
+
+
 def test_upload_rejected_when_worker_disk_is_below_floor(container, monkeypatch) -> None:
     monkeypatch.setenv("DRIPCUT_MIN_FREE_DISK_MB", "1536")
     monkeypatch.setattr(

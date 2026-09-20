@@ -242,11 +242,20 @@ def build_service(container: ServiceContainer | None = None) -> WebClipService:
             str(resolved.settings.video.max_workers),
         )
     )
+    # The desktop queue created by ``build_container`` and the hosted web queue
+    # have different owners and lifecycles. Sharing one history file lets the
+    # unused desktop queue overwrite hosted job history with an empty snapshot
+    # during shutdown, orphaning otherwise durable completed artifacts.
+    web_history_file = root / "jobs.json"
     web_queue = LocalJobQueue(
         resolved.events,
         max_workers=max_video_jobs,
-        history_file=resolved.paths.history_file,
-        state_store=ObjectJobStateStore(storage, resolved.paths.history_file),
+        history_file=web_history_file,
+        state_store=ObjectJobStateStore(
+            storage,
+            web_history_file,
+            key="metadata/queue/web-jobs.json",
+        ),
         progress_persist_interval=2.0,
     )
     max_upload_bytes = int(resolved.settings.server.max_upload_mb) * 1024 * 1024

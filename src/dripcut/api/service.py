@@ -1102,6 +1102,9 @@ class WebClipService:
     def job_response(self, job_id: str, *, idempotent_replay: bool = False) -> JobResponse:
         job = self.jobs.get(job_id)
         if job is None:
+            recovered = self._completed_job_from_project(job_id)
+            if recovered is not None:
+                return recovered
             raise ValidationError("That render job could not be found.", hint="Start the render again.")
         if job.status.value in {"failed", "cancelled"}:
             self.artifacts.discover_clips(job.id)
@@ -1128,6 +1131,43 @@ class WebClipService:
             max_attempts=job.max_attempts,
             idempotent_replay=idempotent_replay,
             idempotency_key=job.idempotency_key,
+            artifacts=artifacts,
+            zip_artifact=zip_artifact,
+        )
+
+    def _completed_job_from_project(self, job_id: str) -> JobResponse | None:
+        """Rebuild a completed response when only queue history was lost.
+
+        Project manifests and artifact manifests are independently durable. A
+        completed render must remain reopenable after a worker replacement even
+        if an older deployment failed to retain its queue snapshot.
+        """
+        summary = next(
+            (
+                item
+                for item in self.container.projects.list_projects()
+                if item.latest_job_id == job_id and item.status == "completed"
+            ),
+            None,
+        )
+        if summary is None:
+            return None
+        records = self.artifacts.list_for_job(job_id)
+        if not any(item.kind == "clip" for item in records):
+            return None
+        artifacts = [self._artifact_response(item) for item in records]
+        zip_artifact = next((item for item in artifacts if item.kind == "zip"), None)
+        return JobResponse(
+            id=job_id,
+            source_id=summary.source_asset_id or "",
+            project_id=summary.id,
+            status="succeeded",
+            progress=1.0,
+            percent=100,
+            stage="Done",
+            elapsed=0.0,
+            created_at=summary.created_at,
+            finished_at=summary.updated_at,
             artifacts=artifacts,
             zip_artifact=zip_artifact,
         )
