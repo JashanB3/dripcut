@@ -597,6 +597,8 @@
 .connection-cards button { background: var(--dc-surface-2); border: 1px solid var(--dc-border); border-radius: var(--dc-radius-pill); cursor: pointer; font-size: 8px; font-weight: 750; padding: 7px 10px; white-space: nowrap; }
 .connection-cards article[data-connected="true"] button { color: var(--dc-danger); }
 .connection-cards button:disabled { cursor: not-allowed; opacity: 0.56; }
+.settings-social-help { align-items: center; background: #f4f0ff; border: 1px solid #e4d9ff; border-radius: 12px; color: var(--dc-text-2); display: flex; font-size: 11px; gap: 9px; line-height: 1.5; margin: 0 0 18px; padding: 12px 14px; }
+.settings-social-help svg { color: #c43681; flex: 0 0 auto; }
 .social-notice { align-items: center; background: color-mix(in srgb, var(--dc-positive) 10%, white); border: 1px solid color-mix(in srgb, var(--dc-positive) 32%, transparent); border-radius: 10px; color: var(--dc-positive); display: flex; font-size: 9px; gap: 7px; margin-bottom: 14px; padding: 11px 13px; }
 .schedule-workspace { display: grid; gap: 18px; grid-template-columns: minmax(280px, 0.7fr) minmax(0, 1.3fr); }
 .schedule-builder, .saved-schedule { background: white; border: 1px solid var(--dc-border-subtle); border-radius: 14px; padding: 17px; }

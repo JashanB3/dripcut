@@ -29,11 +29,18 @@ const templates = [
   ["Play by Play", "Gaming", "lime"],
 ] as const;
 
+const plans = [
+  { name: "Free", price: "$0", detail: "Explore the workflow", features: ["50 render credits / month", "10 clips per project", "1 connected channel", "7-day clip retention"] },
+  { name: "Starter", price: "$9", detail: "For consistent creators", features: ["300 render credits / month", "YouTube + Instagram scheduling", "30-day clip retention", "Buy extra credits anytime"] },
+  { name: "Creator", price: "$19", detail: "For a weekly content engine", features: ["1,000 render credits / month", "AI viral-moment analysis", "Multi-platform scheduling", "Priority render queue"] },
+  { name: "Pro", price: "$49", detail: "For high-volume publishing", features: ["3,000 render credits / month", "Multiple connected channels", "Priority support", "Advanced workflow access"] },
+] as const;
+
 const faqs = [
   ["Do I need AI to make clips?", "No. Standard clipping is the default: choose a duration and number of clips, then render sequential segments."],
   ["Can I upload instead of using YouTube?", "Yes. Direct upload remains available on every clipping workflow."],
   ["Where are finished clips?", "A finished render creates a private, downloadable ZIP. Hosted deployments use signed object-storage links."],
-  ["Can DripCut publish automatically?", "YouTube publishing is in a limited beta while account approval is completed. Download your clips and upload them yourself today. Instagram publishing is coming soon."],
+  ["Can DripCut publish automatically?", "Connect YouTube or an Instagram professional account, choose your clips, and schedule posts from one calendar. Platform availability depends on your connected account and provider approval."],
 ];
 
 export function LandingPage({ signedIn }: { signedIn: boolean }) {
@@ -50,7 +57,7 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
           {menuOpen ? <X /> : <Menu />}
         </button>
         <nav data-open={menuOpen}>
-          <a href="#product">Product</a><a href="#workflow">How it works</a><a href="#templates">Templates</a><a href="#faq">FAQ</a>
+          <a href="#product">Product</a><a href="#workflow">How it works</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a>
         </nav>
         <div className="landing-auth-actions">
           {!signedIn && <button onClick={() => navigatePath("/login")}>Log in</button>}
@@ -74,7 +81,7 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
         </section>
 
         <section className="landing-proof" aria-label="Product principles">
-          <strong>One simple flow</strong><span>Import</span><i /><span>Clip</span><i /><span>Caption</span><i /><span>Review</span><i /><span>Download</span>
+          <strong>One simple flow</strong><span>Import</span><i /><span>Clip</span><i /><span>Caption</span><i /><span>Schedule</span><i /><span>Publish</span>
         </section>
 
         <section className="landing-section landing-product" id="product">
@@ -90,7 +97,7 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
             <article><b>01</b><h3>Bring the source</h3><p>Paste a supported YouTube URL or upload a video directly.</p></article>
             <article><b>02</b><h3>Choose the cuts</h3><p>Set duration and count, or optionally review AI viral moments.</p></article>
             <article><b>03</b><h3>Finish the look</h3><p>Choose a format, framing and readable captions.</p></article>
-            <article><b>04</b><h3>Download your clips</h3><p>Preview your finished clips and download individual videos or the complete ZIP.</p></article>
+            <article><b>04</b><h3>Schedule everywhere</h3><p>Connect YouTube and Instagram, then publish both platforms in the same slot.</p></article>
           </div>
         </section>
 
@@ -104,6 +111,16 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
           <div className="landing-template-grid">{templates.map(([name, category, accent]) => <article key={name} data-accent={accent}><div><LayoutTemplate /><strong>{name}</strong><span>KEEP<br />WATCHING</span></div><footer><b>{category}</b><small>9:16 · Caption safe</small></footer></article>)}</div>
         </section>
 
+        <section className="landing-section landing-pricing" id="pricing">
+          <SectionHeading eyebrow="Simple credit pricing" title="Pay for the clips you make." body="Every plan renews monthly. One render credit covers up to 30 seconds of finished video; scheduling does not use credits." />
+          <div className="landing-price-grid">{plans.map((plan) => <article key={plan.name} data-featured={plan.name === "Creator"}>
+            <span>{plan.name === "Creator" ? "Most popular" : plan.detail}</span><h3>{plan.name}</h3><strong>{plan.price}<small>/month</small></strong><p>{plan.detail}</p>
+            <ul>{plan.features.map((feature) => <li key={feature}><Check size={15} />{feature}</li>)}</ul>
+            <button className={plan.name === "Creator" ? "landing-gradient-button" : "landing-outline-button"} onClick={start}>{plan.name === "Free" ? "Start free" : "Choose plan"}</button>
+          </article>)}</div>
+          <p className="landing-pricing-note">Need more? Add credits whenever you need them. You will always see the credit estimate before a render starts.</p>
+        </section>
+
         <section className="landing-section landing-use-cases">
           <div><span className="landing-section__eyebrow">Made for repeatable content</span><h2>One system, different creator rhythms.</h2></div>
           <div><article><Youtube /><h3>Podcasters</h3><p>Turn full conversations into complete, searchable Shorts.</p></article><article><Sparkles /><h3>Educators</h3><p>Extract clear lessons with readable captions and a strong payoff.</p></article><article><Instagram /><h3>Founder-led brands</h3><p>Build a consistent Reel queue from product stories and updates.</p></article></div>
@@ -114,7 +131,7 @@ export function LandingPage({ signedIn }: { signedIn: boolean }) {
         <section className="landing-final"><span><Sparkles size={16} /> Your next content week starts here</span><h2>Make the long video once.<br />Let DripCut shape the rest.</h2><button className="landing-gradient-button" onClick={start}>{signedIn ? "Continue creating" : "Start creating free"}<ArrowRight size={17} /></button></section>
       </main>
 
-      <footer className="landing-footer"><button className="landing-brand" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><span>dc</span><strong>DripCut</strong></button><p>Turn long videos into clips worth sharing.</p><nav><a href="#product">Product</a><a href="#faq">FAQ</a></nav><small>© {new Date().getFullYear()} DripCut</small></footer>
+      <footer className="landing-footer"><button className="landing-brand" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><span>dc</span><strong>DripCut</strong></button><p>Turn long videos into clips worth sharing.</p><nav><a href="#product">Product</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></nav><small>© {new Date().getFullYear()} DripCut</small></footer>
     </div>
   );
 }
