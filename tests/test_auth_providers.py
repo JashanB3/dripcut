@@ -8,8 +8,10 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from dripcut.api.contracts import OAuthTokenRequest
+from dripcut.auth.models import AuthUser
 from dripcut.auth.provider import build_auth_provider
 from dripcut.auth.supabase import SupabaseAuthProvider
+from dripcut.tenancy.models import Principal
 from dripcut.tenancy.supabase import SupabaseTenantRepository
 
 
@@ -123,3 +125,25 @@ def test_signup_uses_configured_frontend_callback(monkeypatch) -> None:
     assert parse_qs(urlparse(captured["path"]).query) == {
         "redirect_to": ["https://dripcut.onrender.com/auth/callback"]
     }
+
+
+def test_supabase_resource_access_reuses_short_lived_positive_check(monkeypatch) -> None:
+    repository = SupabaseTenantRepository("https://example.supabase.co", "anon-key")
+    principal = Principal(
+        user=AuthUser(id="user-1", email="user@example.test", name="User"),
+        workspace_id="workspace-1",
+        role="owner",
+        access_token="access-token",
+    )
+    calls = 0
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return [{"id": "source-1"}]
+
+    monkeypatch.setattr(repository, "_request", request)
+
+    assert repository.can_access(principal, "source", "source-1")
+    assert repository.can_access(principal, "source", "source-1")
+    assert calls == 1

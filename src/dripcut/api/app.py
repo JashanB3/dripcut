@@ -15,7 +15,17 @@ from pathlib import Path
 from typing import Annotated, Literal, cast
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -357,6 +367,8 @@ def create_app(
     )
     principal_cache: OrderedDict[str, tuple[float, Principal]] = OrderedDict()
     principal_cache_lock = threading.RLock()
+    terminal_job_syncs: set[str] = set()
+    terminal_job_sync_lock = threading.RLock()
 
     def principal_cache_key(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -983,6 +995,15 @@ def create_app(
                     index=artifact.index,
                 )
 
+    def register_terminal_job(principal: Principal, job: JobResponse) -> None:
+        """Persist terminal state after the poll response is already on its way."""
+        try:
+            register_job(principal, job)
+        except Exception:
+            with terminal_job_sync_lock:
+                terminal_job_syncs.discard(job.id)
+            logger.exception("could not persist terminal job state job_id=%s", job.id)
+
     def resolve_script_project(
         principal: Principal,
         project_id: str | None,
@@ -1172,6 +1193,7 @@ def create_app(
     @app.post("/api/jobs/youtube", response_model=JobResponse, status_code=202)
     def queue_youtube_import(
         payload: YouTubeImportRequest,
+        background_tasks: BackgroundTasks,
         idempotency_key: Annotated[
             str | None, Header(alias="Idempotency-Key", max_length=200)
         ] = None,
@@ -1198,7 +1220,7 @@ def create_app(
             else None
         )
         if scoped_key and (existing := clip_service.idempotent_job(scoped_key)):
-            register_job(principal, existing)
+            background_tasks.add_task(register_job, principal, existing)
             return existing
         reservation = usage.reserve_many(
             principal,
@@ -1213,7 +1235,7 @@ def create_app(
                 idempotency_key=scoped_key,
                 workspace_id=principal.workspace_id,
             )
-            register_job(principal, job)
+            background_tasks.add_task(register_job, principal, job)
             return job
         except Exception:
             reservation.release()
@@ -1776,6 +1798,7 @@ def create_app(
     @app.post("/api/jobs/clips", response_model=JobResponse, status_code=202)
     def create_clips(
         payload: RenderRequest,
+        background_tasks: BackgroundTasks,
         idempotency_key: Annotated[
             str | None, Header(alias="Idempotency-Key", max_length=200)
         ] = None,
@@ -1788,7 +1811,7 @@ def create_app(
             else None
         )
         if scoped_key and (existing := clip_service.idempotent_job(scoped_key)):
-            register_job(principal, existing)
+            background_tasks.add_task(register_job, principal, existing)
             return existing
         source = clip_service.source_response(payload.source_id)
         requests = [
@@ -1812,7 +1835,7 @@ def create_app(
                 idempotency_key=scoped_key,
                 workspace_id=principal.workspace_id,
             )
-            register_job(principal, job)
+            background_tasks.add_task(register_job, principal, job)
             return job
         except Exception:
             reservation.release()
@@ -1821,6 +1844,7 @@ def create_app(
     @app.get("/api/jobs/{job_id}", response_model=JobResponse)
     def get_job(
         job_id: str,
+        background_tasks: BackgroundTasks,
         principal: Principal = principal_dependency,
     ) -> JobResponse:
         if acquisition_mode == "worker":
@@ -1829,9 +1853,21 @@ def create_app(
                 if job.workspace_id != principal.workspace_id:
                     raise TenantAccessDenied("job", job_id)
                 return acquisition_response(job)
-        tenants.require_access(principal, "job", job_id)
+        queued_job = clip_service.jobs.get(job_id)
+        job_workspace = (
+            str(queued_job.metadata.get("workspace_id") or "") if queued_job else ""
+        )
+        if job_workspace:
+            if job_workspace != principal.workspace_id:
+                raise TenantAccessDenied("job", job_id)
+        else:
+            tenants.require_access(principal, "job", job_id)
         job = clip_service.job_response(job_id)
-        register_job(principal, job)
+        if job.status in {"succeeded", "failed", "cancelled"}:
+            with terminal_job_sync_lock:
+                if job.id not in terminal_job_syncs:
+                    terminal_job_syncs.add(job.id)
+                    background_tasks.add_task(register_terminal_job, principal, job)
         return job
 
     @app.get("/api/artifacts/{artifact_id}/media")

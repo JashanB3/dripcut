@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
+from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -28,6 +31,16 @@ class SupabaseTenantRepository:
     def __init__(self, url: str, anon_key: str) -> None:
         self.url = url.rstrip("/")
         self.anon_key = anon_key
+        self._access_ttl = max(
+            0.0, float(os.environ.get("DRIPCUT_RESOURCE_ACCESS_CACHE_TTL_SECONDS", "15"))
+        )
+        self._access_limit = max(
+            1, int(os.environ.get("DRIPCUT_RESOURCE_ACCESS_CACHE_MAX_ENTRIES", "4096"))
+        )
+        self._access_cache: OrderedDict[
+            tuple[str, ResourceKind, str], float
+        ] = OrderedDict()
+        self._access_lock = threading.RLock()
 
     @classmethod
     def from_environment(cls) -> SupabaseTenantRepository:
@@ -158,13 +171,19 @@ class SupabaseTenantRepository:
             access_token=principal.access_token,
             prefer="resolution=merge-duplicates,return=minimal",
         )
+        self._remember_access(principal, kind, resource_id)
 
     def can_access(self, principal: Principal, kind: ResourceKind, resource_id: str) -> bool:
+        if self._has_cached_access(principal, kind, resource_id):
+            return True
         query = urlencode({"select": "id", "id": f"eq.{resource_id}", "limit": "1"})
         rows = self._request(
             "GET", f"/rest/v1/{TABLES[kind]}?{query}", access_token=principal.access_token
         )
-        return isinstance(rows, list) and bool(rows)
+        allowed = isinstance(rows, list) and bool(rows)
+        if allowed:
+            self._remember_access(principal, kind, resource_id)
+        return allowed
 
     def require_access(self, principal: Principal, kind: ResourceKind, resource_id: str) -> None:
         if not self.can_access(principal, kind, resource_id):
@@ -185,6 +204,39 @@ class SupabaseTenantRepository:
             access_token=principal.access_token,
             prefer="return=minimal",
         )
+        with self._access_lock:
+            self._access_cache = OrderedDict(
+                (key, expiry)
+                for key, expiry in self._access_cache.items()
+                if key[0] != principal.workspace_id
+            )
+
+    def _has_cached_access(
+        self, principal: Principal, kind: ResourceKind, resource_id: str
+    ) -> bool:
+        if self._access_ttl <= 0:
+            return False
+        key = (principal.workspace_id, kind, resource_id)
+        now = time.monotonic()
+        with self._access_lock:
+            expiry = self._access_cache.get(key, 0.0)
+            if expiry <= now:
+                self._access_cache.pop(key, None)
+                return False
+            self._access_cache.move_to_end(key)
+            return True
+
+    def _remember_access(
+        self, principal: Principal, kind: ResourceKind, resource_id: str
+    ) -> None:
+        if self._access_ttl <= 0:
+            return
+        key = (principal.workspace_id, kind, resource_id)
+        with self._access_lock:
+            self._access_cache[key] = time.monotonic() + self._access_ttl
+            self._access_cache.move_to_end(key)
+            while len(self._access_cache) > self._access_limit:
+                self._access_cache.popitem(last=False)
 
     def _request(
         self,
