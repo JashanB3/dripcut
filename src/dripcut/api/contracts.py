@@ -421,6 +421,7 @@ class SocialDisconnectResponse(BaseModel):
 class ScheduleCreateRequest(BaseModel):
     project_id: str = Field(min_length=1, max_length=64)
     artifact_id: str | None = Field(default=None, max_length=64)
+    artifact_ids: list[str] = Field(default_factory=list, max_length=200)
     platforms: list[Literal["instagram", "youtube"]] = Field(min_length=1, max_length=2)
     interval_minutes: int = Field(default=1440, ge=5, le=43200)
     start_at: str = Field(default="now", max_length=64)

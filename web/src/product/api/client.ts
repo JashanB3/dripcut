@@ -980,9 +980,10 @@ export async function disconnectSocial(platform: Platform): Promise<void> {
 
 export async function saveSchedule(input: {
   projectId: string;
-  artifactId: string;
+  artifactIds: string[];
   platforms: Platform[];
   startAt: string;
+  intervalMinutes: number;
   title: string;
   description: string;
   publishMode: "now" | "schedule";
@@ -994,9 +995,9 @@ export async function saveSchedule(input: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       project_id: input.projectId,
-      artifact_id: input.artifactId,
+      artifact_ids: input.artifactIds,
       platforms: input.platforms,
-      interval_minutes: 1440,
+      interval_minutes: input.intervalMinutes,
       start_at: input.startAt,
       caption: input.description,
       title: input.title,

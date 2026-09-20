@@ -9,7 +9,7 @@ const formatBytes = (bytes: number) => {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 };
 
-export function ClipResults({ job, onBack, onSchedule }: { job: ApiJob; onBack: () => void; onSchedule?: (artifactId: string, clipName: string) => void }) {
+export function ClipResults({ job, onBack, onSchedule }: { job: ApiJob; onBack: () => void; onSchedule?: (artifactIds: string[], clipNames: string[]) => void }) {
   const clips = job.artifacts.filter((artifact) => artifact.kind === "clip");
   const [selected, setSelected] = useState(() => clips.map((clip) => clip.id));
   const allSelected = selected.length === clips.length;
@@ -29,7 +29,7 @@ export function ClipResults({ job, onBack, onSchedule }: { job: ApiJob; onBack: 
     <section className="clip-results-page">
       <header className="results-header">
         <div><span className="preview-badge">{job.elapsed > 0 ? `Render complete · ${job.elapsed.toFixed(1)} seconds` : "Saved render"}</span><h1>Your clips are ready.</h1><p>Preview, download, or schedule each finished clip.</p></div>
-        <div className="results-header__actions"><button className="secondary-action" onClick={onBack}>Edit clip plan</button>{youtubePublishingBeta && onSchedule && <button className="secondary-action" disabled={selected.length !== 1} title={selected.length === 1 ? "Schedule selected clip" : "Select exactly one clip to schedule"} onClick={() => { const clip = clips.find((item) => item.id === selected[0]); if (clip) onSchedule(clip.id, clip.name); }}><CalendarClock size={16} /> {selected.length === 1 ? "Schedule clip" : "Select 1 clip"}</button>}{job.zipArtifact && <a className="primary-action" href={job.zipArtifact.downloadUrl} download><Download size={17} /> Download ZIP</a>}</div>
+        <div className="results-header__actions"><button className="secondary-action" onClick={onBack}>Edit clip plan</button>{youtubePublishingBeta && onSchedule && <button className="secondary-action" disabled={selected.length === 0} title={selected.length ? "Schedule selected clips" : "Select clips to schedule"} onClick={() => { const chosen = clips.filter((item) => selected.includes(item.id)); onSchedule(chosen.map((clip) => clip.id), chosen.map((clip) => clip.name)); }}><CalendarClock size={16} /> {selected.length ? `Schedule ${selected.length} clips` : "Select clips"}</button>}{job.zipArtifact && <a className="primary-action" href={job.zipArtifact.downloadUrl} download><Download size={17} /> Download ZIP</a>}</div>
       </header>
       <div className="results-selection-bar">
         <button onClick={() => setSelected(allSelected ? [] : clips.map((item) => item.id))}>{allSelected ? <CheckSquare2 size={17} /> : <Square size={17} />} Select all</button>

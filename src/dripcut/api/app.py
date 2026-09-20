@@ -1738,10 +1738,13 @@ def create_app(
         principal: Principal = principal_dependency,
     ) -> ScheduleResponse:
         tenants.require_access(principal, "project", payload.project_id)
-        if payload.artifact_id:
-            tenants.require_access(principal, "artifact", payload.artifact_id)
+        artifact_ids = list(dict.fromkeys(payload.artifact_ids))
+        if payload.artifact_id and payload.artifact_id not in artifact_ids:
+            artifact_ids.append(payload.artifact_id)
+        for artifact_id in artifact_ids:
+            tenants.require_access(principal, "artifact", artifact_id)
         project = clip_service.get_project(payload.project_id)
-        post_count = (1 if payload.artifact_id else max(1, project.clip_count)) * len(
+        post_count = (len(artifact_ids) if artifact_ids else max(1, project.clip_count)) * len(
             payload.platforms
         )
         reservation = usage.reserve_many(

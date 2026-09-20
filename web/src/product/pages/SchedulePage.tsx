@@ -12,13 +12,21 @@ export function SchedulePage() {
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [projectId, setProjectId] = useState(() => window.localStorage.getItem("dripcut.activeProjectId") ?? "");
   const [clips, setClips] = useState<ApiArtifact[]>([]);
-  const [artifactId, setArtifactId] = useState(() => window.localStorage.getItem("dripcut.scheduleArtifactId") ?? "");
+  const [artifactIds, setArtifactIds] = useState<string[]>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("dripcut.scheduleArtifactIds") ?? "[]");
+      return Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  });
   const [connection, setConnection] = useState<SocialConnection | null>(null);
   const [title, setTitle] = useState(() => cleanTitle(window.localStorage.getItem("dripcut.scheduleClipName") ?? ""));
   const [description, setDescription] = useState("");
   const [publishMode, setPublishMode] = useState<PublishMode>("schedule");
   const [privacy, setPrivacy] = useState<Privacy>("public");
   const [startAt, setStartAt] = useState(defaultFutureTime);
+  const [intervalMinutes, setIntervalMinutes] = useState(30);
   const [schedule, setSchedule] = useState<SavedSchedule | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -48,16 +56,20 @@ export function SchedulePage() {
     void getClipJob(project.latestJobId).then((job) => {
       const available = job.artifacts.filter((item) => item.kind === "clip");
       setClips(available);
-      setArtifactId((current) => available.some((item) => item.id === current) ? current : available[0]?.id ?? "");
+      setArtifactIds((current) => {
+        const valid = current.filter((id) => available.some((item) => item.id === id));
+        return valid.length ? valid : available.map((item) => item.id);
+      });
     }).catch(setError);
   }, [projectId, projects]);
 
   useEffect(() => {
-    const clip = clips.find((item) => item.id === artifactId);
-    if (!clip) return;
-    window.localStorage.setItem("dripcut.scheduleArtifactId", clip.id);
-    setTitle(cleanTitle(clip.name));
-  }, [artifactId, clips]);
+    window.localStorage.setItem("dripcut.scheduleArtifactIds", JSON.stringify(artifactIds));
+    if (!title.trim()) {
+      const first = clips.find((item) => item.id === artifactIds[0]);
+      if (first) setTitle(cleanTitle(first.name));
+    }
+  }, [artifactIds, clips, title]);
 
   useEffect(() => {
     if (!schedule || !schedule.posts.some((post) => ["scheduled", "uploading", "youtube_processing"].includes(post.status))) return;
@@ -93,9 +105,10 @@ export function SchedulePage() {
     try {
       setSchedule(await saveSchedule({
         projectId,
-        artifactId,
+        artifactIds,
         platforms: ["youtube"],
         startAt: publishMode === "now" ? "now" : startAt,
+        intervalMinutes,
         title: title.trim(),
         description: description.trim(),
         publishMode,
@@ -110,10 +123,12 @@ export function SchedulePage() {
   };
 
   const connected = Boolean(connection?.connected);
-  const canSubmit = connected && projectId && artifactId && title.trim() && (publishMode === "now" || startAt);
+  const canSubmit = connected && projectId && artifactIds.length > 0 && title.trim() && (publishMode === "now" || startAt);
+  const allSelected = clips.length > 0 && artifactIds.length === clips.length;
+  const toggleAll = () => setArtifactIds(allSelected ? [] : clips.map((clip) => clip.id));
 
   return <div className="schedule-page product-page">
-    <header className="page-heading-row"><div><span className="eyebrow">YouTube publishing</span><h1>Schedule one finished clip.</h1><p>DripCut saves the job immediately, then uploads to YouTube in the background.</p></div></header>
+    <header className="page-heading-row"><div><span className="eyebrow">YouTube publishing</span><h1>Schedule your finished clips.</h1><p>Choose one or more clips and DripCut will upload them in sequence.</p></div></header>
     {error !== null && <CustomerError error={error} fallback="Scheduling could not be completed." />}
     <div className="connection-cards">
       {connection && <article data-connected={connection.connected}>
@@ -125,17 +140,17 @@ export function SchedulePage() {
     <div className="schedule-workspace">
       <section className="schedule-builder">
         {!connected && <div className="social-notice"><Youtube size={16} /> Connect YouTube before scheduling this clip.</div>}
-        <label><span>Finished project</span><select value={projectId} onChange={(event) => { setProjectId(event.target.value); setArtifactId(""); }}><option value="">Choose a project</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
-        <label><span>Video</span><select value={artifactId} onChange={(event) => setArtifactId(event.target.value)}><option value="">Choose one clip</option>{clips.map((clip) => <option key={clip.id} value={clip.id}>{clip.index ? `Clip ${clip.index} · ` : ""}{clip.name}</option>)}</select></label>
+        <label><span>Finished project</span><select value={projectId} onChange={(event) => { setProjectId(event.target.value); setArtifactIds([]); }}><option value="">Choose a project</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
+        <div className="schedule-clip-picker"><div className="schedule-clip-picker__header"><span>Clips to publish</span><button type="button" onClick={toggleAll} disabled={!clips.length}>{allSelected ? "Clear all" : "Select all"}</button></div>{clips.length ? clips.map((clip) => <label key={clip.id} className="schedule-clip-option"><input type="checkbox" checked={artifactIds.includes(clip.id)} onChange={() => setArtifactIds((current) => current.includes(clip.id) ? current.filter((id) => id !== clip.id) : [...current, clip.id])} /><span>{clip.index ? `Clip ${clip.index} · ` : ""}{clip.name}</span></label>) : <span className="schedule-clip-picker__empty">No finished clips found in this project.</span>}<small>{artifactIds.length} of {clips.length} clips selected</small></div>
         <label><span>Title</span><input required maxLength={100} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="YouTube title" /></label>
         <label><span>Description (optional)</span><textarea maxLength={5000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add context, links, or hashtags" /></label>
         <div><span>Publish</span><div className="platform-options"><button type="button" data-selected={publishMode === "now"} onClick={() => changeMode("now")}>Publish now</button><button type="button" data-selected={publishMode === "schedule"} onClick={() => changeMode("schedule")}>Schedule</button></div></div>
-        {publishMode === "schedule" && <label><span>Date and time · {timezone}</span><input type="datetime-local" value={startAt} min={minimumFutureTime()} onChange={(event) => setStartAt(event.target.value)} /></label>}
+        {publishMode === "schedule" && <><label><span>First upload · {timezone}</span><input type="datetime-local" value={startAt} min={minimumFutureTime()} onChange={(event) => setStartAt(event.target.value)} /></label><label><span>Upload one clip every</span><select value={intervalMinutes} onChange={(event) => setIntervalMinutes(Number(event.target.value))}><option value={10}>10 minutes</option><option value={20}>20 minutes</option><option value={30}>30 minutes</option><option value={60}>1 hour</option><option value={120}>2 hours</option></select></label></>}
         <label><span>Privacy</span><select value={privacy} onChange={(event) => setPrivacy(event.target.value as Privacy)} disabled={publishMode === "schedule"}>{publishMode === "schedule" ? <option value="public">Public at scheduled time</option> : <><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></>}</select></label>
-        <button className="primary-action" disabled={!canSubmit || busy} onClick={() => void submit()}><CalendarClock size={16} /> {busy ? "Saving…" : publishMode === "now" ? "Publish clip" : "Schedule clip"}</button>
+        <button className="primary-action" disabled={!canSubmit || busy} onClick={() => void submit()}><CalendarClock size={16} /> {busy ? "Saving…" : publishMode === "now" ? `Publish ${artifactIds.length} clips` : `Schedule ${artifactIds.length} clips`}</button>
       </section>
       <section className="saved-schedule">
-        {!schedule && <div className="projects-empty projects-empty--large"><CalendarClock size={28} /><strong>No YouTube job yet</strong><span>Select one clip, add its metadata, and choose when to publish.</span></div>}
+        {!schedule && <div className="projects-empty projects-empty--large"><CalendarClock size={28} /><strong>No YouTube job yet</strong><span>Select one or more clips, choose an upload interval, and publish.</span></div>}
         {schedule && <><header><CheckCircle2 size={20} /><div><strong>{schedule.posts[0]?.status === "scheduled_on_youtube" ? "Scheduled on YouTube" : "Accepted by DripCut"}</strong><span>{schedule.archiveName}</span></div><em>{friendlyStatus(schedule.posts[0]?.status)}</em></header>{schedule.posts.map((post) => <article key={post.id} data-status={post.status}><strong>{post.title || post.clipName}</strong><span>YouTube · {friendlyStatus(post.status)}</span><small>{post.publishMode === "schedule" ? new Date(post.publishAt).toLocaleString([], { timeZone: post.timezone }) : `${post.privacy} upload`}</small>{post.externalPostId && <small>Video ID: {post.externalPostId}</small>}{post.externalUrl && <a href={post.externalUrl} target="_blank" rel="noreferrer">Open on YouTube <ExternalLink size={13} /></a>}{post.errorMessage && <small>{post.errorMessage}</small>}</article>)}</>}
       </section>
     </div>

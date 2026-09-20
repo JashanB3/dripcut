@@ -603,6 +603,14 @@
 .schedule-builder { display: flex; flex-direction: column; gap: 13px; }
 .schedule-builder textarea { min-height: 90px; padding-block: 9px; resize: vertical; }
 .schedule-builder .primary-action { justify-content: center; }
+.schedule-clip-picker { border: 1px solid var(--dc-border); border-radius: 10px; display: flex; flex-direction: column; gap: 7px; max-height: 230px; overflow-y: auto; padding: 10px; }
+.schedule-clip-picker__header { align-items: center; display: flex; justify-content: space-between; }
+.schedule-clip-picker__header > span { font-size: 9px; font-weight: 750; }
+.schedule-clip-picker__header button { color: var(--dc-purple); font-size: 9px; font-weight: 700; }
+.schedule-clip-option { align-items: center; display: flex; flex-direction: row !important; gap: 8px !important; }
+.schedule-clip-option input { min-height: 15px; width: 15px; }
+.schedule-clip-option span { font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schedule-clip-picker > small, .schedule-clip-picker__empty { color: var(--dc-text-3); font-size: 8px; }
 .saved-schedule > header { align-items: center; border-bottom: 1px solid var(--dc-border-subtle); display: flex; gap: 8px; padding-bottom: 12px; }
 .saved-schedule > header > div { display: flex; flex-direction: column; }
 .saved-schedule > header span { color: var(--dc-text-3); font-size: 8px; }

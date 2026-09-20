@@ -578,12 +578,21 @@ class WebClipService:
         project = self.container.projects.load(request.project_id)
         if mvp_profile():
             clips = self._project_clips(project)
-            if request.artifact_id:
-                clips = [clip for clip in clips if clip.id == request.artifact_id]
+            selected_ids = list(dict.fromkeys(request.artifact_ids))
+            if request.artifact_id and request.artifact_id not in selected_ids:
+                selected_ids.append(request.artifact_id)
+            if selected_ids:
+                selected_set = set(selected_ids)
+                clips = [clip for clip in clips if clip.id in selected_set]
                 if not clips:
                     raise ValidationError(
-                        "The selected clip is not part of this project.",
+                        "The selected clips are not part of this project.",
                         hint="Return to the completed project and select the clip again.",
+                    )
+                if len(clips) != len(selected_set):
+                    raise ValidationError(
+                        "One or more selected clips are not part of this project.",
+                        hint="Return to the completed project and select the clips again.",
                     )
             schedule = self.container.social.create_schedule_for_clips(
                 clip_assets=[
