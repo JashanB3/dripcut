@@ -313,7 +313,7 @@ export async function parseApiResponse(response: Response): Promise<unknown | nu
   return data;
 }
 
-export async function requestJson<T>(path: string, init: RequestInit = {}, timeoutMs = 15_000): Promise<T> {
+export async function requestJson<T>(path: string, init: RequestInit = {}, timeoutMs = 15_000, retryTimeout = true): Promise<T> {
   const method = init.method ?? "GET";
   const startedAt = performance.now();
   const controller = new AbortController();
@@ -343,6 +343,10 @@ export async function requestJson<T>(path: string, init: RequestInit = {}, timeo
   } catch (error) {
     if (error instanceof ApiError) throw error;
     if (error instanceof DOMException && error.name === "AbortError") {
+      if (retryTimeout && method === "GET") {
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 750));
+        return requestJson<T>(path, init, Math.max(timeoutMs, 30_000), false);
+      }
       throw new ApiError(
         "The DripCut processing server took too long to respond.",
         "The render may still be running. DripCut will retry automatically.",
@@ -490,7 +494,10 @@ export async function createClipJob(
 ): Promise<ApiJob> {
   const payload = await requestJson<JobPayload>("/api/jobs/clips", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": `render:${sourceId}:${segments.map((segment) => `${segment.id}:${segment.start}:${segment.end}`).join(",")}`,
+    },
     body: JSON.stringify({
       source_id: sourceId,
       segments,
@@ -501,7 +508,7 @@ export async function createClipJob(
       platforms: options.platforms,
       fast_mode: true,
     }),
-  }, 30_000);
+  }, 60_000);
   return jobFromPayload(payload);
 }
 

@@ -96,6 +96,15 @@ describe("requestJson", () => {
     await requestJson("/api/session-test");
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: "include" });
   });
+
+  it("retries a timed-out GET once before surfacing an error", async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new DOMException("aborted", "AbortError"))
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(requestJson("/api/health", {}, 1)).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("createClipJob", () => {
