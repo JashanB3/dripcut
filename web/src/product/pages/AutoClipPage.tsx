@@ -204,7 +204,7 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
         </>
       )}
       {state.phase === "render-preview" && job && <RenderProgress job={job} onUpdate={updateJob} onComplete={finishJob} onBack={() => dispatch({ type: "back-to-configure" })} />}
-      {state.phase === "results" && job && <ClipResults job={job} onBack={() => dispatch({ type: "back-to-configure" })} onSchedule={() => { window.localStorage.setItem("dripcut.activeProjectId", job.projectId); onNavigate("schedule"); }} />}
+      {state.phase === "results" && job && <ClipResults job={job} onBack={() => dispatch({ type: "back-to-configure" })} onSchedule={(artifactId, clipName) => { window.localStorage.setItem("dripcut.activeProjectId", job.projectId); window.localStorage.setItem("dripcut.scheduleArtifactId", artifactId); window.localStorage.setItem("dripcut.scheduleClipName", clipName); onNavigate("schedule"); }} />}
     </div>
   );
 }

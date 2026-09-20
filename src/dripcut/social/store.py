@@ -128,7 +128,11 @@ class LocalSocialStore:
             due.extend(
                 post
                 for post in schedule.posts
-                if post.status == "scheduled" and _as_utc(post.publish_at) <= now
+                if post.status == "scheduled"
+                and (
+                    (post.publish_mode == "schedule" and post.privacy == "public")
+                    or _as_utc(post.publish_at) <= now
+                )
             )
         return due
 
@@ -205,7 +209,7 @@ class SupabaseSocialStore:
             "/rest/v1/social_connections?"
             + urlencode(
                 {
-                    "select": "id,workspace_id,owner_id,platform,external_account_id,display_name,encrypted_credentials,status,created_at,updated_at",
+                    "select": "id,workspace_id,owner_id,platform,external_account_id,display_name,encrypted_credentials,scopes,token_expires_at,status,created_at,updated_at",
                     "workspace_id": f"eq.{workspace_id}",
                     "platform": f"eq.{platform}",
                     "status": "eq.connected",
@@ -228,6 +232,12 @@ class SupabaseSocialStore:
                 "external_account_id": account.external_account_id,
                 "display_name": account.display_name,
                 "encrypted_credentials": account.encrypted_credentials,
+                "scopes": list(account.scopes),
+                "token_expires_at": (
+                    datetime.fromtimestamp(account.token_expires_at, tz=UTC).isoformat()
+                    if account.token_expires_at
+                    else None
+                ),
                 "status": account.status,
             },
             access_token=access_token,
@@ -255,9 +265,12 @@ class SupabaseSocialStore:
                     "workspace_id": post.workspace_id,
                     "owner_id": post.owner_id,
                     "project_id": post.project_id,
+                    "artifact_id": post.artifact_id or None,
+                    "social_connection_id": post.social_connection_id or None,
                     "platform": post.platform,
                     "publish_at": _as_utc(post.publish_at).isoformat(),
                     "status": post.status,
+                    "attempt": post.attempt_count,
                     "metadata": {
                         "schedule_id": schedule.id,
                         "archive": post.archive,
@@ -265,6 +278,12 @@ class SupabaseSocialStore:
                         "clip_name": post.clip_name,
                         "caption": post.caption,
                         "title": post.title,
+                        "description": post.description,
+                        "privacy": post.privacy,
+                        "timezone": post.timezone,
+                        "publish_mode": post.publish_mode,
+                        "external_url": post.external_url,
+                        "last_error_code": post.last_error_code,
                         "schedule_created_at": schedule.created_at,
                     },
                 }
@@ -329,14 +348,19 @@ class SupabaseSocialStore:
                 {
                     "select": "*",
                     "status": "eq.scheduled",
-                    "publish_at": f"lte.{now.isoformat()}",
                     "order": "publish_at.asc",
                     "limit": "25",
                 }
             ),
             access_token=self.service_key,
         )
-        return [_post_from_row(row) for row in rows if isinstance(row, dict)]
+        posts = [_post_from_row(row) for row in rows if isinstance(row, dict)]
+        return [
+            post
+            for post in posts
+            if (post.publish_mode == "schedule" and post.privacy == "public")
+            or _as_utc(post.publish_at) <= now
+        ][:25]
 
     def recover_interrupted_posts(self) -> int:
         if not self.service_key:
@@ -362,6 +386,7 @@ class SupabaseSocialStore:
                 "status": post.status,
                 "external_post_id": post.external_post_id,
                 "error_message": post.error_message,
+                "attempt": post.attempt_count,
                 "metadata": {
                     "schedule_id": post.schedule_id,
                     "archive": post.archive,
@@ -369,6 +394,12 @@ class SupabaseSocialStore:
                     "clip_name": post.clip_name,
                     "caption": post.caption,
                     "title": post.title,
+                    "description": post.description,
+                    "privacy": post.privacy,
+                    "timezone": post.timezone,
+                    "publish_mode": post.publish_mode,
+                    "external_url": post.external_url,
+                    "last_error_code": post.last_error_code,
                 },
             },
             access_token=access_token,
@@ -444,6 +475,12 @@ def _account_from_row(row: dict[str, Any]) -> SocialAccount:
         external_account_id=str(row.get("external_account_id") or ""),
         display_name=str(row.get("display_name") or ""),
         encrypted_credentials=str(row.get("encrypted_credentials") or ""),
+        scopes=tuple(str(value) for value in row.get("scopes") or []),
+        token_expires_at=(
+            _as_timestamp(row.get("token_expires_at"))
+            if row.get("token_expires_at")
+            else None
+        ),
         status=str(row.get("status") or "connected"),
         created_at=_as_timestamp(row.get("created_at")),
         updated_at=_as_timestamp(row.get("updated_at")),
@@ -481,9 +518,22 @@ def _post_from_row(row: dict[str, Any]) -> ScheduledPost:
         publish_at=_as_utc(str(row["publish_at"])).isoformat(),
         caption=str(metadata.get("caption") or ""),
         title=str(metadata.get("title") or ""),
+        artifact_id=str(row.get("artifact_id") or ""),
+        social_connection_id=str(row.get("social_connection_id") or ""),
+        description=str(metadata.get("description") or metadata.get("caption") or ""),
+        privacy=str(metadata.get("privacy") or "private"),
+        timezone=str(metadata.get("timezone") or "UTC"),
+        publish_mode=str(metadata.get("publish_mode") or "schedule"),
+        attempt_count=int(row.get("attempt") or 0),
+        last_error_code=(
+            str(metadata.get("last_error_code")) if metadata.get("last_error_code") else None
+        ),
         status=str(row.get("status") or "draft"),  # type: ignore[arg-type]
         external_post_id=(
             str(row["external_post_id"]) if row.get("external_post_id") else None
+        ),
+        external_url=(
+            str(metadata.get("external_url")) if metadata.get("external_url") else None
         ),
         error_message=str(row["error_message"]) if row.get("error_message") else None,
     )

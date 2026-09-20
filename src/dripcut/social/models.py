@@ -8,7 +8,17 @@ from typing import Any, Literal
 from uuid import uuid4
 
 PlatformName = Literal["instagram", "youtube"]
-PostStatus = Literal["draft", "scheduled", "uploading", "published", "failed"]
+PostStatus = Literal[
+    "draft",
+    "scheduled",
+    "uploading",
+    "uploaded",
+    "youtube_processing",
+    "scheduled_on_youtube",
+    "published",
+    "failed",
+    "cancelled",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +69,8 @@ class SocialAccount:
     external_account_id: str
     display_name: str
     encrypted_credentials: str
+    scopes: tuple[str, ...] = ()
+    token_expires_at: float | None = None
     status: str = "connected"
     id: str = field(default_factory=lambda: str(uuid4()))
     created_at: float = field(default_factory=time.time)
@@ -77,6 +89,7 @@ class PublishResult:
     external_post_id: str
     url: str | None = None
     credentials: SocialCredentials | None = None
+    status: PostStatus = "published"
 
 
 @dataclass(slots=True)
@@ -93,7 +106,16 @@ class ScheduledPost:
     project_id: str = "legacy"
     archive: str = ""
     title: str = ""
+    artifact_id: str = ""
+    social_connection_id: str = ""
+    description: str = ""
+    privacy: str = "private"
+    timezone: str = "UTC"
+    publish_mode: str = "schedule"
+    attempt_count: int = 0
+    last_error_code: str | None = None
     external_post_id: str | None = None
+    external_url: str | None = None
     error_message: str | None = None
 
 

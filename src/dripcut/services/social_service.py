@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dripcut.core.errors import SocialProviderError, ValidationError
 from dripcut.core.paths import AppPaths
@@ -54,6 +55,8 @@ class SocialConnection:
     configured: bool
     detail: str
     setup_hint: str
+    channel_id: str = ""
+    avatar_url: str = ""
 
 
 class _OAuthStateSigner:
@@ -195,11 +198,30 @@ class SocialScheduleService:
             external_account_id=result.external_account_id,
             display_name=result.display_name,
             encrypted_credentials=encrypted,
+            scopes=result.credentials.scopes,
+            token_expires_at=result.credentials.expires_at,
         )
         self.store.save_account(account, access_token=principal.access_token)
         return self._connection(provider, account)
 
     def disconnect(self, platform: PlatformName, principal: Principal) -> None:
+        account = self.store.account(
+            principal.workspace_id,
+            platform,
+            access_token=principal.access_token,
+        )
+        if account is not None:
+            try:
+                credentials = SocialCredentials.from_dict(
+                    self.cipher.decrypt(account.encrypted_credentials)
+                )
+                revoke = getattr(self._provider(platform), "revoke", None)
+                if callable(revoke):
+                    revoke(credentials)
+            except Exception:
+                # Removing the local credential must still succeed when the provider
+                # is unavailable or has already revoked the token.
+                pass
         self.store.delete_account(
             principal.workspace_id,
             platform,
@@ -276,12 +298,18 @@ class SocialScheduleService:
     def create_schedule_for_clips(
         self,
         *,
-        clip_assets: list[tuple[str, str]],
+        clip_assets: list[tuple[str, str] | tuple[str, str, str]],
         project_id: str,
         platforms: list[str],
         interval_minutes: int,
         start_at: str,
         caption: str,
+        title: str = "",
+        description: str = "",
+        privacy: str = "private",
+        timezone: str = "UTC",
+        publish_mode: str = "schedule",
+        require_connected: bool = False,
         principal: Principal | None = None,
     ) -> SocialSchedule:
         """Schedule durable object-store clips without building a duplicate ZIP."""
@@ -295,27 +323,53 @@ class SocialScheduleService:
             interval_minutes=interval_minutes,
             start_at=start_at,
             caption=caption,
+            title=title,
+            description=description,
+            privacy=privacy,
+            timezone=timezone,
+            publish_mode=publish_mode,
+            require_connected=require_connected,
             principal=principal,
         )
 
     def _create_schedule_for_assets(
         self,
         *,
-        clip_assets: list[tuple[str, str]],
+        clip_assets: list[tuple[str, str] | tuple[str, str, str]],
         archive_label: str,
         project_id: str,
         platforms: list[str],
         interval_minutes: int,
         start_at: str,
         caption: str,
-        principal: Principal | None,
+        title: str = "",
+        description: str = "",
+        privacy: str = "private",
+        timezone: str = "UTC",
+        publish_mode: str = "schedule",
+        require_connected: bool = False,
+        principal: Principal | None = None,
     ) -> SocialSchedule:
         selected = [item for item in platforms if item in {"instagram", "youtube"}]
         if not selected:
             raise ValidationError("Choose Instagram, YouTube, or both.")
         if interval_minutes < 5:
             raise ValidationError("Use at least 5 minutes between posts.")
-        start = self._parse_start(start_at)
+        if privacy not in {"private", "unlisted", "public"}:
+            raise ValidationError("Choose Private, Unlisted, or Public visibility.")
+        if publish_mode not in {"now", "schedule"}:
+            raise ValidationError("Choose Publish now or Schedule.")
+        start = self._parse_start(start_at, timezone=timezone)
+        if publish_mode == "schedule" and require_connected:
+            if privacy != "public":
+                raise ValidationError(
+                    "YouTube scheduled publishing requires Public visibility.",
+                    hint="Choose Public, or use Publish now with Private or Unlisted visibility.",
+                )
+            if start <= datetime.now(UTC) + timedelta(seconds=30):
+                raise ValidationError("Choose a publish time at least one minute in the future.")
+        elif publish_mode == "now":
+            start = datetime.now(UTC)
         template = (caption or "").strip() or "{clip} #shorts #reels"
         workspace_id, access_token = _identity(principal)
         owner_id = principal.user.id if principal else "local"
@@ -328,12 +382,29 @@ class SocialScheduleService:
             )
             for platform in selected
         }
+        if require_connected:
+            disconnected = [platform for platform, account in accounts.items() if account is None]
+            if disconnected:
+                raise ValidationError(
+                    f"{disconnected[0].title()} is not connected.",
+                    hint=f"Connect {disconnected[0].title()} before scheduling this clip.",
+                )
         posts: list[ScheduledPost] = []
         slot = 0
-        for clip, asset_reference in clip_assets:
+        normalized_assets = [
+            ("", item[0], item[1]) if len(item) == 2 else (item[0], item[1], item[2])
+            for item in clip_assets
+        ]
+        for artifact_id, clip, asset_reference in normalized_assets:
             clean_name = Path(clip).stem
             for platform in selected:
                 publish_at = start + timedelta(minutes=interval_minutes * slot)
+                account = accounts[platform]
+                post_title = (title.strip() or clean_name)[:100]
+                rendered_caption = template.replace("{clip}", clean_name).replace(
+                    "{platform}", platform
+                )
+                post_description = (description.strip() or rendered_caption)[:5000]
                 posts.append(
                     ScheduledPost(
                         schedule_id=schedule_id,
@@ -344,20 +415,22 @@ class SocialScheduleService:
                         clip_name=clip,
                         archive=asset_reference,
                         publish_at=publish_at.isoformat(timespec="minutes"),
-                        caption=(
-                            template.replace("{clip}", clean_name).replace(
-                                "{platform}", platform
-                            )
-                        ),
-                        title=clean_name,
-                        status="scheduled" if accounts[platform] else "draft",
+                        caption=post_description,
+                        title=post_title,
+                        artifact_id=artifact_id,
+                        social_connection_id=account.id if account else "",
+                        description=post_description,
+                        privacy=privacy,
+                        timezone=timezone,
+                        publish_mode=publish_mode,
+                        status="scheduled" if account else "draft",
                     )
                 )
                 slot += 1
         schedule = SocialSchedule(
             id=schedule_id,
             project_id=project_id,
-            archive=clip_assets[0][1],
+            archive=normalized_assets[0][2],
             archive_name=archive_label,
             created_at=time.time(),
             posts=posts,
@@ -365,7 +438,11 @@ class SocialScheduleService:
             owner_id=owner_id,
         )
         self.store.save_schedule(schedule, access_token=access_token)
-        self.dispatch_due(principal=principal)
+        if require_connected:
+            for post in posts:
+                self._enqueue(post, access_token=access_token)
+        else:
+            self.dispatch_due(principal=principal)
         return schedule
 
     def latest_schedule(self, principal: Principal | None = None) -> SocialSchedule | None:
@@ -484,10 +561,13 @@ class SocialScheduleService:
             return
         post.status = "uploading"
         post.error_message = None
+        post.last_error_code = None
         self.store.update_post(post, access_token=access_token)
 
         def publish(job: Job) -> JobResult:
             try:
+                post.attempt_count += 1
+                self.store.update_post(post, access_token=access_token)
                 job.set_progress(0.08, "Preparing clip")
                 video = self._extract_clip(post)
                 account = self.store.account(
@@ -510,18 +590,30 @@ class SocialScheduleService:
                     media_url=media_url,
                     title=post.title,
                     caption=post.caption,
+                    publish_at=(
+                        _as_utc_iso(post.publish_at)
+                        if post.platform == "youtube"
+                        and post.publish_mode == "schedule"
+                        and post.privacy == "public"
+                        else None
+                    ),
+                    privacy=post.privacy,
                 )
                 if result.credentials and result.credentials != credentials:
                     account.encrypted_credentials = self.cipher.encrypt(
                         result.credentials.to_dict()
                     )
                     account.updated_at = time.time()
+                    account.scopes = result.credentials.scopes
+                    account.token_expires_at = result.credentials.expires_at
                     self.store.save_account(account, access_token=access_token)
-                post.status = "published"
+                post.status = result.status
                 post.external_post_id = result.external_post_id
+                post.external_url = result.url
                 post.error_message = None
+                post.last_error_code = None
                 self.store.update_post(post, access_token=access_token)
-                job.set_progress(1.0, "Published")
+                job.set_progress(1.0, _status_label(result.status))
                 return JobResult(
                     outputs=[],
                     message=f"Published {post.clip_name} to {post.platform}.",
@@ -531,11 +623,13 @@ class SocialScheduleService:
                         "platform": post.platform,
                         "external_post_id": result.external_post_id,
                         "url": result.url,
+                        "status": result.status,
                     },
                 )
             except Exception as error:
                 post.status = "failed"
-                post.error_message = str(error)[:300]
+                post.last_error_code = _safe_error_code(error)
+                post.error_message = _safe_publish_error(error)
                 self.store.update_post(post, access_token=access_token)
                 raise
 
@@ -543,11 +637,15 @@ class SocialScheduleService:
         existing = self.queue.get_by_idempotency_key(idempotency_key)
         if existing is not None:
             if existing.status.value == "succeeded":
-                post.status = "published"
+                post.status = str(
+                    (existing.result.data.get("status") if existing.result else None)
+                    or "published"
+                )  # type: ignore[assignment]
                 if existing.result:
                     post.external_post_id = str(
                         existing.result.data.get("external_post_id") or ""
                     ) or None
+                    post.external_url = str(existing.result.data.get("url") or "") or None
                 self.store.update_post(post, access_token=access_token)
             elif existing.status.is_terminal:
                 self.queue.resume_callable(existing.id, publish)
@@ -566,6 +664,7 @@ class SocialScheduleService:
                     "post_id": post.id,
                     "workspace_id": post.workspace_id,
                     "platform": post.platform,
+                    "artifact_id": post.artifact_id,
                 },
             ),
             publish,
@@ -588,6 +687,12 @@ class SocialScheduleService:
             raise ValidationError("The scheduled ZIP is no longer available.")
         target_dir = ensure_dir(self.paths.temp / "publishing" / post.id)
         target = target_dir / safe_filename(Path(post.clip_name).name, fallback="clip.mp4")
+        if archive.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
+            try:
+                shutil.copyfile(archive, target)
+                return target
+            except OSError as error:
+                raise ValidationError("The scheduled clip could not be copied.") from error
         try:
             with (
                 zipfile.ZipFile(archive) as zipped,
@@ -612,13 +717,20 @@ class SocialScheduleService:
         except KeyError as error:
             raise ValidationError("Choose YouTube or Instagram.") from error
 
-    @staticmethod
-    def _connection(
-        provider: SocialProvider, account: SocialAccount | None
-    ) -> SocialConnection:
+    def _connection(self, provider: SocialProvider, account: SocialAccount | None) -> SocialConnection:
         connected = bool(account and account.status == "connected")
+        channel_id = ""
+        avatar_url = ""
         if connected:
             detail = f"Connected as {account.display_name}."
+            try:
+                credentials = SocialCredentials.from_dict(
+                    self.cipher.decrypt(account.encrypted_credentials)
+                )
+                channel_id = credentials.extra.get("channel_id", account.external_account_id)
+                avatar_url = credentials.extra.get("avatar_url", "")
+            except Exception:
+                channel_id = account.external_account_id
         elif provider.configured:
             detail = "OAuth is configured. Connect an account to publish."
         else:
@@ -636,21 +748,56 @@ class SocialScheduleService:
             configured=provider.configured,
             detail=detail,
             setup_hint=hints[provider.platform],
+            channel_id=channel_id,
+            avatar_url=avatar_url,
         )
 
     @staticmethod
-    def _parse_start(value: str) -> datetime:
+    def _parse_start(value: str, *, timezone: str = "UTC") -> datetime:
         raw = (value or "").strip()
         if not raw or raw.lower() == "now":
-            return datetime.now().astimezone() + timedelta(minutes=5)
+            return datetime.now(UTC) + timedelta(minutes=5)
         try:
             parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo else parsed.astimezone()
-        except ValueError as error:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=ZoneInfo(timezone))
+            return parsed.astimezone(UTC)
+        except (ValueError, ZoneInfoNotFoundError) as error:
             raise ValidationError(
                 "Use a valid start date and time.",
                 hint="Choose the date and time from the scheduling control.",
             ) from error
+
+
+def _as_utc_iso(value: str) -> str:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _safe_error_code(error: Exception) -> str:
+    if isinstance(error, SocialProviderError):
+        return "YOUTUBE_CONNECTION_ERROR"
+    if isinstance(error, ValidationError):
+        return "SCHEDULE_ARTIFACT_ERROR"
+    return "YOUTUBE_UPLOAD_ERROR"
+
+
+def _safe_publish_error(error: Exception) -> str:
+    if isinstance(error, SocialProviderError):
+        return "YouTube could not accept this upload. Reconnect YouTube and try again."
+    if isinstance(error, ValidationError):
+        return str(error)[:300]
+    return "YouTube upload failed temporarily. DripCut will retry safely."
+
+
+def _status_label(status: str) -> str:
+    return {
+        "scheduled_on_youtube": "Scheduled on YouTube",
+        "uploaded": "Uploaded to YouTube",
+        "published": "Published",
+    }.get(status, "Upload complete")
 
 
 def _identity(principal: Principal | None) -> tuple[str, str]:

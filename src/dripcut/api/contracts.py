@@ -404,6 +404,8 @@ class SocialConnectionResponse(BaseModel):
     configured: bool
     detail: str
     setup_hint: str
+    channel_id: str = ""
+    avatar_url: str = ""
 
 
 class SocialOAuthStartResponse(BaseModel):
@@ -418,10 +420,16 @@ class SocialDisconnectResponse(BaseModel):
 
 class ScheduleCreateRequest(BaseModel):
     project_id: str = Field(min_length=1, max_length=64)
+    artifact_id: str | None = Field(default=None, max_length=64)
     platforms: list[Literal["instagram", "youtube"]] = Field(min_length=1, max_length=2)
-    interval_minutes: int = Field(ge=5, le=43200)
-    start_at: str = Field(default="now", max_length=40)
+    interval_minutes: int = Field(default=1440, ge=5, le=43200)
+    start_at: str = Field(default="now", max_length=64)
     caption: str = Field(default="{clip} #shorts #reels", max_length=2200)
+    title: str = Field(default="", max_length=100)
+    description: str = Field(default="", max_length=5000)
+    publish_mode: Literal["now", "schedule"] = "schedule"
+    privacy: Literal["private", "unlisted", "public"] = "private"
+    timezone: str = Field(default="UTC", min_length=1, max_length=100)
 
 
 class SchedulePostUpdateRequest(BaseModel):
@@ -435,8 +443,17 @@ class ScheduledPostResponse(BaseModel):
     clip_name: str
     publish_at: str
     caption: str
+    title: str = ""
+    artifact_id: str = ""
+    description: str = ""
+    privacy: str = "private"
+    timezone: str = "UTC"
+    publish_mode: str = "schedule"
+    attempt_count: int = 0
+    last_error_code: str | None = None
     status: str
     external_post_id: str | None = None
+    external_url: str | None = None
     error_message: str | None = None
 
 

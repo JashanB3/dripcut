@@ -41,7 +41,11 @@ class SocialProvider(Protocol):
         media_url: str | None,
         title: str,
         caption: str,
+        publish_at: str | None = None,
+        privacy: str = "private",
     ) -> PublishResult: ...
+
+    def revoke(self, credentials: SocialCredentials) -> None: ...
 
 
 def _provider_error(provider: str, response: httpx.Response) -> SocialProviderError:
@@ -80,6 +84,7 @@ class YouTubeProvider:
     upload_endpoint = "https://www.googleapis.com/upload/youtube/v3/videos"
     default_scopes = (
         "https://www.googleapis.com/auth/youtube.upload",
+        "https://www.googleapis.com/auth/youtube.readonly",
     )
 
     def __init__(
@@ -142,9 +147,15 @@ class YouTubeProvider:
         if response.is_error:
             raise _provider_error("Google", response)
         payload = response.json()
+        refresh_token = str(payload.get("refresh_token") or "") or None
+        if not refresh_token:
+            raise SocialProviderError(
+                "Google did not provide durable YouTube access.",
+                hint="Remove DripCut from Google account permissions, then connect YouTube again.",
+            )
         credentials = SocialCredentials(
             access_token=str(payload["access_token"]),
-            refresh_token=str(payload.get("refresh_token") or "") or None,
+            refresh_token=refresh_token,
             expires_at=time.time() + float(payload.get("expires_in") or 3600),
             token_type=str(payload.get("token_type") or "Bearer"),
             scopes=tuple(str(payload.get("scope") or "").split()),
@@ -163,10 +174,22 @@ class YouTubeProvider:
                 hint="Create or select a YouTube channel, then connect again.",
             )
         selected = items[0]
+        snippet = selected.get("snippet", {})
+        thumbnails = snippet.get("thumbnails", {}) if isinstance(snippet, dict) else {}
+        avatar = ""
+        if isinstance(thumbnails, dict):
+            for size in ("high", "medium", "default"):
+                candidate = thumbnails.get(size, {})
+                if isinstance(candidate, dict) and candidate.get("url"):
+                    avatar = str(candidate["url"])
+                    break
         credentials = SocialCredentials(
             **{
                 **credentials.to_dict(),
-                "extra": {"channel_id": str(selected["id"])},
+                "extra": {
+                    "channel_id": str(selected["id"]),
+                    "avatar_url": avatar,
+                },
             }
         )
         return OAuthResult(
@@ -183,19 +206,25 @@ class YouTubeProvider:
         media_url: str | None,
         title: str,
         caption: str,
+        publish_at: str | None = None,
+        privacy: str = "private",
     ) -> PublishResult:
         del media_url
         current = self._refresh(credentials)
+        selected_privacy = privacy if privacy in {"private", "unlisted", "public"} else "private"
+        status_metadata: dict[str, object] = {
+            "privacyStatus": "private" if publish_at else selected_privacy,
+            "selfDeclaredMadeForKids": False,
+        }
+        if publish_at:
+            status_metadata["publishAt"] = publish_at
         metadata = {
             "snippet": {
                 "title": (title.strip() or video_path.stem)[:100],
                 "description": caption[:5000],
                 "categoryId": os.environ.get("DRIPCUT_YOUTUBE_CATEGORY_ID", "22"),
             },
-            "status": {
-                "privacyStatus": os.environ.get("DRIPCUT_YOUTUBE_PRIVACY", "private"),
-                "selfDeclaredMadeForKids": False,
-            },
+            "status": status_metadata,
         }
         init = self.client.post(
             self.upload_endpoint,
@@ -229,7 +258,24 @@ class YouTubeProvider:
             external_post_id=video_id,
             url=f"https://www.youtube.com/shorts/{video_id}",
             credentials=current,
+            status=(
+                "scheduled_on_youtube"
+                if publish_at
+                else "published" if selected_privacy == "public" else "uploaded"
+            ),
         )
+
+    def revoke(self, credentials: SocialCredentials) -> None:
+        token = credentials.refresh_token or credentials.access_token
+        if not token:
+            return
+        response = self.client.post(
+            "https://oauth2.googleapis.com/revoke",
+            data={"token": token},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        if response.is_error and response.status_code not in {400, 401}:
+            raise _provider_error("Google", response)
 
     def _refresh(self, credentials: SocialCredentials) -> SocialCredentials:
         if credentials.expires_at is None or credentials.expires_at > time.time() + 90:
@@ -410,8 +456,10 @@ class InstagramProvider:
         media_url: str | None,
         title: str,
         caption: str,
+        publish_at: str | None = None,
+        privacy: str = "private",
     ) -> PublishResult:
-        del video_path, title
+        del video_path, title, publish_at, privacy
         if not media_url or not media_url.startswith("https://"):
             raise SocialProviderError(
                 "Instagram needs a temporary HTTPS media URL.",
@@ -446,6 +494,9 @@ class InstagramProvider:
         if not media_id:
             raise SocialProviderError("Instagram did not return a published media id.")
         return PublishResult(external_post_id=media_id)
+
+    def revoke(self, credentials: SocialCredentials) -> None:
+        del credentials
 
     def _wait_for_container(self, creation_id: str, token: str) -> None:
         deadline = time.monotonic() + 180

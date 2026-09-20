@@ -592,6 +592,7 @@
 .connection-cards article { align-items: flex-start; background: white; border: 1px solid var(--dc-border); border-radius: 12px; display: flex; gap: 11px; padding: 14px; }
 .connection-cards article[data-connected="true"] { border-color: var(--dc-positive); }
 .connection-cards article > div { display: flex; flex: 1; flex-direction: column; gap: 3px; }
+.connection-cards .social-avatar { border-radius: 50%; height: 34px; object-fit: cover; width: 34px; }
 .connection-cards span, .connection-cards small { color: var(--dc-text-3); font-size: 8px; line-height: 1.45; }
 .connection-cards button { background: var(--dc-surface-2); border: 1px solid var(--dc-border); border-radius: var(--dc-radius-pill); cursor: pointer; font-size: 8px; font-weight: 750; padding: 7px 10px; white-space: nowrap; }
 .connection-cards article[data-connected="true"] button { color: var(--dc-danger); }
@@ -608,6 +609,7 @@
 .saved-schedule > header em { background: var(--dc-accent-soft); border-radius: var(--dc-radius-pill); color: var(--dc-accent); font-size: 8px; font-style: normal; margin-left: auto; padding: 5px 8px; }
 .saved-schedule > article { border-bottom: 1px solid var(--dc-border-subtle); display: flex; flex-direction: column; gap: 3px; padding: 10px 2px; }
 .saved-schedule > article span, .saved-schedule > article small { color: var(--dc-text-3); font-size: 8px; }
+.saved-schedule > article a { align-items: center; color: var(--dc-accent); display: inline-flex; font-size: 9px; font-weight: 750; gap: 4px; margin-top: 5px; text-decoration: none; }
 .saved-schedule > article label { display: grid; gap: 4px; margin-top: 6px; }
 .saved-schedule > article label > span { color: var(--dc-text-3); font-size: 8px; font-weight: 750; }
 .saved-schedule > article input, .saved-schedule > article textarea { background: var(--dc-surface-1); border: 1px solid var(--dc-border); border-radius: 8px; color: var(--dc-text-1); font: inherit; padding: 8px 9px; }

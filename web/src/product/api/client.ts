@@ -931,9 +931,9 @@ export async function findViralMoments(
 
 export async function fetchSocialConnections(): Promise<SocialConnection[]> {
   const payload = await requestJson<Array<{
-    platform: Platform; label: string; connected: boolean; configured: boolean; detail: string; setup_hint: string;
+    platform: Platform; label: string; connected: boolean; configured: boolean; detail: string; setup_hint: string; channel_id: string; avatar_url: string;
   }>>("/api/social/connections", { cache: "no-store" });
-  return payload.map((item) => ({ ...item, setupHint: item.setup_hint }));
+  return payload.map((item) => ({ ...item, setupHint: item.setup_hint, channelId: item.channel_id, avatarUrl: item.avatar_url }));
 }
 
 export async function fetchProviderCapabilities(): Promise<ProviderCapabilities[]> {
@@ -980,20 +980,30 @@ export async function disconnectSocial(platform: Platform): Promise<void> {
 
 export async function saveSchedule(input: {
   projectId: string;
+  artifactId: string;
   platforms: Platform[];
-  intervalMinutes: number;
   startAt: string;
-  caption: string;
+  title: string;
+  description: string;
+  publishMode: "now" | "schedule";
+  privacy: "private" | "unlisted" | "public";
+  timezone: string;
 }): Promise<SavedSchedule> {
   const payload = await requestJson<SchedulePayload>("/api/schedules", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       project_id: input.projectId,
+      artifact_id: input.artifactId,
       platforms: input.platforms,
-      interval_minutes: input.intervalMinutes,
+      interval_minutes: 1440,
       start_at: input.startAt,
-      caption: input.caption,
+      caption: input.description,
+      title: input.title,
+      description: input.description,
+      publish_mode: input.publishMode,
+      privacy: input.privacy,
+      timezone: input.timezone,
     }),
   });
   return scheduleFromPayload(payload);
@@ -1002,8 +1012,9 @@ export async function saveSchedule(input: {
 type SchedulePayload = {
   id: string; project_id: string; archive_name: string; created_at: number;
   posts: Array<{
-    id: string; platform: Platform; clip_name: string; publish_at: string; caption: string;
-    status: string; external_post_id?: string; error_message?: string;
+    id: string; platform: Platform; clip_name: string; publish_at: string; caption: string; title: string;
+    artifact_id: string; description: string; privacy: string; timezone: string; publish_mode: "now" | "schedule";
+    attempt_count: number; last_error_code?: string; status: string; external_post_id?: string; external_url?: string; error_message?: string;
   }>;
   publish_ready: boolean;
 };
@@ -1020,8 +1031,17 @@ function scheduleFromPayload(payload: SchedulePayload): SavedSchedule {
       clipName: post.clip_name,
       publishAt: post.publish_at,
       caption: post.caption,
+      title: post.title,
+      artifactId: post.artifact_id,
+      description: post.description,
+      privacy: post.privacy,
+      timezone: post.timezone,
+      publishMode: post.publish_mode,
+      attemptCount: post.attempt_count,
+      lastErrorCode: post.last_error_code,
       status: post.status,
       externalPostId: post.external_post_id,
+      externalUrl: post.external_url,
       errorMessage: post.error_message,
     })),
     publishReady: payload.publish_ready,

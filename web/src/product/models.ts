@@ -302,6 +302,8 @@ export interface SocialConnection {
   configured: boolean;
   detail: string;
   setupHint: string;
+  channelId: string;
+  avatarUrl: string;
 }
 
 export interface SavedSchedule {
@@ -315,8 +317,17 @@ export interface SavedSchedule {
     clipName: string;
     publishAt: string;
     caption: string;
+    title: string;
+    artifactId: string;
+    description: string;
+    privacy: string;
+    timezone: string;
+    publishMode: "now" | "schedule";
+    attemptCount: number;
+    lastErrorCode?: string;
     status: string;
     externalPostId?: string;
+    externalUrl?: string;
     errorMessage?: string;
   }>;
   publishReady: boolean;

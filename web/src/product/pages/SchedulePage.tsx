@@ -1,87 +1,107 @@
-import { CalendarClock, CheckCircle2, Instagram, Sparkles, Youtube } from "lucide-react";
-import { useEffect, useState } from "react";
+import { CalendarClock, CheckCircle2, ExternalLink, Youtube } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
-import { beginSocialOAuth, disconnectSocial, fetchProjects, fetchProviderCapabilities, fetchSchedule, fetchSocialConnections, generateSocialMetadata, saveSchedule, updateScheduledPost } from "../api/client";
+import { beginSocialOAuth, disconnectSocial, fetchProjects, fetchSchedule, fetchSocialConnections, getClipJob, saveSchedule } from "../api/client";
 import { CustomerError } from "../components/CustomerError";
-import type { ApiProject, Platform, ProviderCapabilities, SavedSchedule, SocialConnection, SocialMetadataPackage } from "../models";
+import type { ApiArtifact, ApiProject, SavedSchedule, SocialConnection } from "../models";
+
+type PublishMode = "now" | "schedule";
+type Privacy = "private" | "unlisted" | "public";
 
 export function SchedulePage() {
   const [projects, setProjects] = useState<ApiProject[]>([]);
-  const [projectId, setProjectId] = useState("");
-  const [connections, setConnections] = useState<SocialConnection[]>([]);
-  const [capabilities, setCapabilities] = useState<ProviderCapabilities[]>([]);
-  const [platforms, setPlatforms] = useState<Platform[]>(["youtube"]);
-  const [interval, setInterval] = useState(1440);
-  const [startAt, setStartAt] = useState("");
-  const [caption, setCaption] = useState("{clip} #shorts #reels");
+  const [projectId, setProjectId] = useState(() => window.localStorage.getItem("dripcut.activeProjectId") ?? "");
+  const [clips, setClips] = useState<ApiArtifact[]>([]);
+  const [artifactId, setArtifactId] = useState(() => window.localStorage.getItem("dripcut.scheduleArtifactId") ?? "");
+  const [connection, setConnection] = useState<SocialConnection | null>(null);
+  const [title, setTitle] = useState(() => cleanTitle(window.localStorage.getItem("dripcut.scheduleClipName") ?? ""));
+  const [description, setDescription] = useState("");
+  const [publishMode, setPublishMode] = useState<PublishMode>("schedule");
+  const [privacy, setPrivacy] = useState<Privacy>("public");
+  const [startAt, setStartAt] = useState(defaultFutureTime);
   const [schedule, setSchedule] = useState<SavedSchedule | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const [metadata, setMetadata] = useState<SocialMetadataPackage | null>(null);
-  const [connectionBusy, setConnectionBusy] = useState<Platform | null>(null);
-  const [notice, setNotice] = useState("");
+  const [connectionBusy, setConnectionBusy] = useState(false);
+  const timezone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
+
+  const refreshConnection = async () => {
+    const statuses = await fetchSocialConnections();
+    setConnection(statuses.find((item) => item.platform === "youtube") ?? null);
+  };
 
   useEffect(() => {
-    const socialResult = new URLSearchParams(window.location.search).get("social");
-    if (socialResult?.endsWith("-connected")) setNotice("Account connected. Your scheduled posts can now publish automatically.");
-    if (socialResult?.endsWith("-denied")) setNotice("Connection cancelled. Nothing was changed.");
-    void Promise.all([fetchProjects(100), fetchSocialConnections(), fetchProviderCapabilities()]).then(([items, statuses, providerCapabilities]) => {
-      const ready = items.filter((item) => item.downloadArtifactId && item.status === "completed");
+    void Promise.all([fetchProjects(100), fetchSocialConnections()]).then(([items, statuses]) => {
+      const ready = items.filter((item) => item.status === "completed" && item.latestJobId);
       setProjects(ready);
-      setProjectId(ready[0]?.id ?? "");
-      setConnections(statuses.filter((item) => item.platform === "youtube"));
-      setCapabilities(providerCapabilities);
+      setProjectId((current) => ready.some((item) => item.id === current) ? current : ready[0]?.id ?? "");
+      setConnection(statuses.find((item) => item.platform === "youtube") ?? null);
     }).catch(setError);
   }, []);
 
   useEffect(() => {
-    if (!schedule || !schedule.posts.some((post) => post.status === "scheduled" || post.status === "uploading")) return;
-    const timer = window.setInterval(() => {
-      void fetchSchedule(schedule.id).then(setSchedule).catch(() => undefined);
-    }, 5000);
+    const project = projects.find((item) => item.id === projectId);
+    if (!project?.latestJobId) {
+      setClips([]);
+      return;
+    }
+    void getClipJob(project.latestJobId).then((job) => {
+      const available = job.artifacts.filter((item) => item.kind === "clip");
+      setClips(available);
+      setArtifactId((current) => available.some((item) => item.id === current) ? current : available[0]?.id ?? "");
+    }).catch(setError);
+  }, [projectId, projects]);
+
+  useEffect(() => {
+    const clip = clips.find((item) => item.id === artifactId);
+    if (!clip) return;
+    window.localStorage.setItem("dripcut.scheduleArtifactId", clip.id);
+    setTitle(cleanTitle(clip.name));
+  }, [artifactId, clips]);
+
+  useEffect(() => {
+    if (!schedule || !schedule.posts.some((post) => ["scheduled", "uploading", "youtube_processing"].includes(post.status))) return;
+    const timer = window.setInterval(() => void fetchSchedule(schedule.id).then(setSchedule).catch(() => undefined), 4000);
     return () => window.clearInterval(timer);
   }, [schedule]);
 
-  const adjustPost = async (postId: string, update: { publishAt?: string; caption?: string }) => {
-    if (!schedule) return;
-    setError(null);
-    try {
-      setSchedule(await updateScheduledPost(schedule.id, postId, update));
-    } catch (reason) {
-      setError(reason);
-    }
-  };
-
-  const changeConnection = async (connection: SocialConnection) => {
-    setConnectionBusy(connection.platform);
+  const changeConnection = async () => {
+    if (!connection) return;
+    setConnectionBusy(true);
     setError(null);
     try {
       if (connection.connected) {
-        await disconnectSocial(connection.platform);
-        setConnections(await fetchSocialConnections());
-        setNotice(`${connection.label} disconnected.`);
+        await disconnectSocial("youtube");
+        await refreshConnection();
       } else {
-        const authorizationUrl = await beginSocialOAuth(connection.platform);
-        window.location.assign(authorizationUrl);
+        window.location.assign(await beginSocialOAuth("youtube"));
       }
     } catch (reason) {
       setError(reason);
-    } finally {
-      setConnectionBusy(null);
+      setConnectionBusy(false);
     }
   };
 
-  const toggle = (platform: Platform) => {
-    if (!capabilities.some((item) => item.platform === platform && item.canSchedule)) return;
-    const next = platforms.includes(platform) ? platforms.filter((item) => item !== platform) : [...platforms, platform];
-    if (next.length) setPlatforms(next);
+  const changeMode = (mode: PublishMode) => {
+    setPublishMode(mode);
+    setPrivacy(mode === "schedule" ? "public" : "private");
   };
 
-  const save = async () => {
+  const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      setSchedule(await saveSchedule({ projectId, platforms, intervalMinutes: interval, startAt: startAt || "now", caption }));
+      setSchedule(await saveSchedule({
+        projectId,
+        artifactId,
+        platforms: ["youtube"],
+        startAt: publishMode === "now" ? "now" : startAt,
+        title: title.trim(),
+        description: description.trim(),
+        publishMode,
+        privacy,
+        timezone,
+      }));
     } catch (reason) {
       setError(reason);
     } finally {
@@ -89,52 +109,52 @@ export function SchedulePage() {
     }
   };
 
-  const createMetadata = async () => {
-    if (!projectId) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const generated = await generateSocialMetadata(projectId);
-      setMetadata(generated);
-      setCaption(
-        platforms.includes("instagram")
-          ? `${generated.instagramCaption}\n\n${generated.instagramHashtags.join(" ")}\n${generated.instagramCta}`.trim()
-          : `${generated.youtubeDescription}\n\n${generated.youtubeHashtags.join(" ")}`.trim(),
-      );
-    } catch (reason) {
-      setError(reason);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const connected = Boolean(connection?.connected);
+  const canSubmit = connected && projectId && artifactId && title.trim() && (publishMode === "now" || startAt);
 
   return <div className="schedule-page product-page">
-    <header className="page-heading-row"><div><span className="eyebrow">Publishing</span><h1>YouTube publishing beta</h1><p>Save a durable posting plan. Publishing unlocks only when official platform credentials are configured.</p></div></header>
+    <header className="page-heading-row"><div><span className="eyebrow">YouTube publishing</span><h1>Schedule one finished clip.</h1><p>DripCut saves the job immediately, then uploads to YouTube in the background.</p></div></header>
     {error !== null && <CustomerError error={error} fallback="Scheduling could not be completed." />}
-    {notice && <div className="social-notice"><CheckCircle2 size={16} /> {notice}</div>}
-    <div className="connection-cards">{connections.map((connection) => <article key={connection.platform} data-connected={connection.connected}>{connection.platform === "youtube" ? <Youtube /> : <Instagram />}<div><strong>{connection.label}</strong><span>{connection.detail}</span><small>{connection.connected ? "Encrypted credentials are stored on the server." : connection.configured ? "Official OAuth is ready." : connection.setupHint}</small></div><button disabled={!connection.configured || connectionBusy === connection.platform} onClick={() => void changeConnection(connection)}>{connectionBusy === connection.platform ? "Working…" : connection.connected ? "Disconnect" : connection.configured ? "Connect" : "Admin setup"}</button></article>)}</div>
+    <div className="connection-cards">
+      {connection && <article data-connected={connection.connected}>
+        {connection.avatarUrl ? <img className="social-avatar" src={connection.avatarUrl} alt="" /> : <Youtube />}
+        <div><strong>YouTube</strong><span>{connection.connected ? connection.detail : "Connect a YouTube channel to publish clips."}</span>{connection.channelId && <small>Channel ID: {connection.channelId}</small>}<small>{connection.connected ? "Refresh access is encrypted and stored on the server." : connection.configured ? "Google OAuth is ready." : connection.setupHint}</small></div>
+        <button disabled={!connection.configured || connectionBusy} onClick={() => void changeConnection()}>{connectionBusy ? "Working…" : connection.connected ? "Disconnect" : connection.configured ? "Connect YouTube" : "Admin setup required"}</button>
+      </article>}
+    </div>
     <div className="schedule-workspace">
       <section className="schedule-builder">
-        <label><span>Finished project</span><select value={projectId} onChange={(event) => setProjectId(event.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
-        <div><span>Platforms</span><div className="platform-options"><button disabled={!capabilities.some((item) => item.platform === "youtube" && item.canSchedule)} data-selected={platforms.includes("youtube")} onClick={() => toggle("youtube")}><Youtube size={16} /> YouTube</button><span>Instagram publishing coming soon</span></div></div>
-        <label><span>Start</span><input type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} /></label>
-        <label><span>Interval</span><select value={interval} onChange={(event) => setInterval(Number(event.target.value))}><option value="360">Every 6 hours</option><option value="720">Every 12 hours</option><option value="1440">Daily</option><option value="2880">Every 2 days</option></select></label>
-        <label><span>Caption template</span><textarea value={caption} onChange={(event) => setCaption(event.target.value)} /></label>
-        <button className="secondary-action" disabled={!projectId || busy} onClick={() => void createMetadata()}><Sparkles size={16} /> {busy ? "Generating…" : "Generate editable AI metadata"}</button>
-        {metadata && <div className="social-metadata-preview"><strong>{metadata.youtubeTitle}</strong><span>{metadata.hook} · {metadata.category}</span><small>{metadata.postingDescription}</small></div>}
-        <button className="primary-action" disabled={!projectId || busy} onClick={() => void save()}><CalendarClock size={16} /> {busy ? "Saving…" : platforms.every((platform) => connections.some((connection) => connection.platform === platform && connection.connected)) ? "Schedule posts" : "Save draft"}</button>
+        {!connected && <div className="social-notice"><Youtube size={16} /> Connect YouTube before scheduling this clip.</div>}
+        <label><span>Finished project</span><select value={projectId} onChange={(event) => { setProjectId(event.target.value); setArtifactId(""); }}><option value="">Choose a project</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
+        <label><span>Video</span><select value={artifactId} onChange={(event) => setArtifactId(event.target.value)}><option value="">Choose one clip</option>{clips.map((clip) => <option key={clip.id} value={clip.id}>{clip.index ? `Clip ${clip.index} · ` : ""}{clip.name}</option>)}</select></label>
+        <label><span>Title</span><input required maxLength={100} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="YouTube title" /></label>
+        <label><span>Description (optional)</span><textarea maxLength={5000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add context, links, or hashtags" /></label>
+        <div><span>Publish</span><div className="platform-options"><button type="button" data-selected={publishMode === "now"} onClick={() => changeMode("now")}>Publish now</button><button type="button" data-selected={publishMode === "schedule"} onClick={() => changeMode("schedule")}>Schedule</button></div></div>
+        {publishMode === "schedule" && <label><span>Date and time · {timezone}</span><input type="datetime-local" value={startAt} min={minimumFutureTime()} onChange={(event) => setStartAt(event.target.value)} /></label>}
+        <label><span>Privacy</span><select value={privacy} onChange={(event) => setPrivacy(event.target.value as Privacy)} disabled={publishMode === "schedule"}>{publishMode === "schedule" ? <option value="public">Public at scheduled time</option> : <><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></>}</select></label>
+        <button className="primary-action" disabled={!canSubmit || busy} onClick={() => void submit()}><CalendarClock size={16} /> {busy ? "Saving…" : publishMode === "now" ? "Publish clip" : "Schedule clip"}</button>
       </section>
       <section className="saved-schedule">
-        {!schedule && <div className="projects-empty projects-empty--large"><CalendarClock size={28} /><strong>No schedule preview yet</strong><span>Choose a finished project and save its posting rhythm.</span></div>}
-        {schedule && <><header><CheckCircle2 size={20} /><div><strong>{schedule.posts.length} posts planned</strong><span>{schedule.archiveName}</span></div><em>{schedule.publishReady ? "Publishing active" : "Draft only"}</em></header>{schedule.posts.map((post) => <article key={post.id} data-status={post.status}><strong>{post.clipName}</strong><span>{post.platform} · {post.status}</span><label><span>Publish time</span><input type="datetime-local" defaultValue={toLocalInput(post.publishAt)} disabled={post.status === "uploading" || post.status === "published"} onBlur={(event) => event.target.value && void adjustPost(post.id, { publishAt: event.target.value })} /></label><label><span>Caption</span><textarea defaultValue={post.caption} disabled={post.status === "uploading" || post.status === "published"} onBlur={(event) => void adjustPost(post.id, { caption: event.target.value })} /></label>{post.errorMessage && <small>{post.errorMessage}</small>}</article>)}{!schedule.publishReady && <p className="development-note">Draft saved. Connect every selected account to enable automatic publishing.</p>}</>}
+        {!schedule && <div className="projects-empty projects-empty--large"><CalendarClock size={28} /><strong>No YouTube job yet</strong><span>Select one clip, add its metadata, and choose when to publish.</span></div>}
+        {schedule && <><header><CheckCircle2 size={20} /><div><strong>{schedule.posts[0]?.status === "scheduled_on_youtube" ? "Scheduled on YouTube" : "Accepted by DripCut"}</strong><span>{schedule.archiveName}</span></div><em>{friendlyStatus(schedule.posts[0]?.status)}</em></header>{schedule.posts.map((post) => <article key={post.id} data-status={post.status}><strong>{post.title || post.clipName}</strong><span>YouTube · {friendlyStatus(post.status)}</span><small>{post.publishMode === "schedule" ? new Date(post.publishAt).toLocaleString([], { timeZone: post.timezone }) : `${post.privacy} upload`}</small>{post.externalPostId && <small>Video ID: {post.externalPostId}</small>}{post.externalUrl && <a href={post.externalUrl} target="_blank" rel="noreferrer">Open on YouTube <ExternalLink size={13} /></a>}{post.errorMessage && <small>{post.errorMessage}</small>}</article>)}</>}
       </section>
     </div>
   </div>;
 }
 
-function toLocalInput(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value.slice(0, 16);
+function cleanTitle(name: string): string {
+  return name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim().slice(0, 100);
+}
+
+function dateInput(minutesAhead: number): string {
+  const date = new Date(Date.now() + minutesAhead * 60_000);
   const offset = date.getTimezoneOffset() * 60_000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function defaultFutureTime(): string { return dateInput(10); }
+function minimumFutureTime(): string { return dateInput(1); }
+
+function friendlyStatus(status = "scheduled"): string {
+  return ({ scheduled: "Queued", uploading: "Uploading to YouTube", uploaded: "Uploaded privately", youtube_processing: "YouTube processing", scheduled_on_youtube: "Scheduled on YouTube", published: "Published", failed: "Needs attention", cancelled: "Cancelled", draft: "Connect YouTube" } as Record<string, string>)[status] ?? status;
 }

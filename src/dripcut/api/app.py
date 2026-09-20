@@ -1657,18 +1657,24 @@ def create_app(
     ) -> RedirectResponse:
         if error:
             return RedirectResponse(
-                _frontend_url(f"/schedule?social={platform}-denied"),
+                _frontend_url(f"/settings?social={platform}-denied"),
                 status_code=303,
             )
-        social.complete_oauth(
-            platform,
-            principal,
-            code=code,
-            state=state,
-            redirect_uri=_social_callback_url(platform),
-        )
+        try:
+            social.complete_oauth(
+                platform,
+                principal,
+                code=code,
+                state=state,
+                redirect_uri=_social_callback_url(platform),
+            )
+        except DripCutError:
+            return RedirectResponse(
+                _frontend_url(f"/settings?social={platform}-failed"),
+                status_code=303,
+            )
         return RedirectResponse(
-            _frontend_url(f"/schedule?social={platform}-connected"),
+            _frontend_url(f"/settings?social={platform}-connected"),
             status_code=303,
         )
 
@@ -1714,8 +1720,12 @@ def create_app(
         principal: Principal = principal_dependency,
     ) -> ScheduleResponse:
         tenants.require_access(principal, "project", payload.project_id)
+        if payload.artifact_id:
+            tenants.require_access(principal, "artifact", payload.artifact_id)
         project = clip_service.get_project(payload.project_id)
-        post_count = max(1, project.clip_count) * len(payload.platforms)
+        post_count = (1 if payload.artifact_id else max(1, project.clip_count)) * len(
+            payload.platforms
+        )
         reservation = usage.reserve_many(
             principal,
             [UsageRequest("scheduled_posts", float(post_count))],
