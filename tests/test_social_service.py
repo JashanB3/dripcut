@@ -212,7 +212,10 @@ def test_create_schedule_from_latest_zip(paths) -> None:
     assert schedule.posts[0].platform == "instagram"
     assert schedule.posts[0].publish_at.startswith("2026-08-22T18:00")
     assert schedule.posts[1].platform == "youtube"
-    assert schedule.posts[1].publish_at.startswith("2026-08-22T18:30")
+    # Both platforms publish each clip in the same slot; the interval advances
+    # between clips rather than between platforms.
+    assert schedule.posts[1].publish_at.startswith("2026-08-22T18:00")
+    assert schedule.posts[2].publish_at.startswith("2026-08-22T18:30")
     assert "clip-001" in schedule.posts[0].caption
     assert service.latest_schedule() is not None
 

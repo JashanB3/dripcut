@@ -1,4 +1,4 @@
-import { Minus, Plus, Youtube } from "lucide-react";
+import { Instagram, Minus, Plus, Sparkles, Youtube } from "lucide-react";
 
 import {
   maximumClipCount,
@@ -10,7 +10,7 @@ import {
 import type { ClipDuration } from "../models";
 
 const durationOptions: ClipDuration[] = [15, 30, 45, 60, "custom"];
-export function ClipControls({ state, dispatch, onCreate, starting }: { state: AutoClipState; dispatch: (action: AutoClipAction) => void; onCreate: () => void; onToggleAI: () => void; starting: boolean; aiBusy: boolean }) {
+export function ClipControls({ state, dispatch, onCreate, onToggleAI, starting, aiBusy }: { state: AutoClipState; dispatch: (action: AutoClipAction) => void; onCreate: () => void; onToggleAI: () => void; starting: boolean; aiBusy: boolean }) {
   const segments = selectedSegments(state);
   const max = maximumClipCount(state);
   const clipLabel = segments.length === 1 ? "clip" : "clips";
@@ -49,10 +49,16 @@ export function ClipControls({ state, dispatch, onCreate, starting }: { state: A
         )}
       </div>
       <div className="control-group">
-        <div className="control-label"><strong>Destination</strong><span>YouTube MVP</span></div>
+        <div className="control-label"><strong>Destination</strong><span>Choose one or both</span></div>
         <div className="platform-options">
-          <button data-selected><Youtube size={17} /> YouTube Shorts</button>
+          <button type="button" data-selected={state.platforms.includes("youtube")} onClick={() => dispatch({ type: "toggle-platform", platform: "youtube" })}><Youtube size={17} /> YouTube Shorts</button>
+          <button type="button" data-selected={state.platforms.includes("instagram")} onClick={() => dispatch({ type: "toggle-platform", platform: "instagram" })}><Instagram size={17} /> Instagram Reels</button>
         </div>
+      </div>
+      <div className="control-group ai-mode-control">
+        <div className="control-label"><strong>AI highlight mode</strong><span>{state.aiEnabled ? "Transcript-scored" : "Off"}</span></div>
+        <button type="button" className="ai-toggle" data-selected={state.aiEnabled} disabled={aiBusy} onClick={onToggleAI}><Sparkles size={16} /> {aiBusy ? "Finding strong moments…" : state.aiEnabled ? "Refresh viral recommendations" : "Find my best moments"}</button>
+        <small>AI scores hooks, completeness, retention, and shareability for the selected destination.</small>
       </div>
       <div className="clip-plan-summary">
         <span>Sequential</span>

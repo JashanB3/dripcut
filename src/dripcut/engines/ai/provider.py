@@ -252,6 +252,11 @@ class StructuredAIProvider(AIProvider):
             f"{platform}. Score {rubric}. Source duration: {duration:.3f}s. "
             f"Target duration: {target_length:.3f}s. Return at most {max_clips} segments. "
             f"Language: {language or 'unknown'}. Metadata: {json.dumps(metadata or {})}. "
+            "Use the timestamped transcript as the source of truth. Start before the hook, "
+            "include the complete setup and payoff, and end on a natural sentence boundary. "
+            "Prefer self-contained moments with a clear first-second hook; reject greetings, "
+            "dead air, mid-sentence starts, repeated points, and clips that need outside context. "
+            "Do not return overlapping moments; rank the strongest distinct moments first. "
             "Each segment needs start, end, score, hook_score, retention_score, "
             "shareability_score, platform, reason, and hook.\n\n"
             f"{_bounded(transcript)}",
@@ -269,8 +274,22 @@ class StructuredAIProvider(AIProvider):
                     "The AI returned a clip outside the supported duration.",
                     hint="Run viral analysis again with a different clip length.",
                 )
-        result.segments.sort(key=lambda item: item.score, reverse=True)
-        return ViralMomentAnalysis(segments=result.segments[:max_clips])
+        result.segments.sort(key=lambda item: (item.score, item.hook_score, item.retention_score), reverse=True)
+        distinct: list[ViralMoment] = []
+        for candidate in result.segments:
+            # Keep recommendations editorially distinct. A model may return
+            # several near-identical windows around the same sentence.
+            overlaps = any(
+                max(candidate.start, chosen.start) < min(candidate.end, chosen.end)
+                and (min(candidate.end, chosen.end) - max(candidate.start, chosen.start))
+                / max(min(candidate.duration, chosen.duration), 1.0) > 0.45
+                for chosen in distinct
+            )
+            if not overlaps:
+                distinct.append(candidate)
+            if len(distinct) >= max_clips:
+                break
+        return ViralMomentAnalysis(segments=distinct)
 
     def plan_edit(self, prompt: str, *, duration: float) -> AIEditPlan:
         return self._generate(

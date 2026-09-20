@@ -398,6 +398,9 @@ class SocialScheduleService:
         for artifact_id, clip, asset_reference in normalized_assets:
             clean_name = Path(clip).stem
             for platform in selected:
+                # A slot represents one clip. When both platforms are selected,
+                # publish that clip to Instagram and YouTube simultaneously;
+                # advance the interval only after both platform posts exist.
                 publish_at = start + timedelta(minutes=interval_minutes * slot)
                 account = accounts[platform]
                 post_title = (title.strip() or clean_name)[:100]
@@ -426,7 +429,7 @@ class SocialScheduleService:
                         status="scheduled" if account else "draft",
                     )
                 )
-                slot += 1
+            slot += 1
         schedule = SocialSchedule(
             id=schedule_id,
             project_id=project_id,

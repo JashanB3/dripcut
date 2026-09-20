@@ -1,4 +1,4 @@
-import { CalendarClock, CheckCircle2, ExternalLink, Youtube } from "lucide-react";
+import { CalendarClock, CheckCircle2, ExternalLink, Instagram, Youtube } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { beginSocialOAuth, disconnectSocial, fetchProjects, fetchSchedule, fetchSocialConnections, getClipJob, saveSchedule } from "../api/client";
@@ -20,7 +20,13 @@ export function SchedulePage() {
       return [];
     }
   });
-  const [connection, setConnection] = useState<SocialConnection | null>(null);
+  const [connections, setConnections] = useState<SocialConnection[]>([]);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<Array<"youtube" | "instagram">>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("dripcut.schedulePlatforms") ?? '["youtube"]');
+      return Array.isArray(stored) ? stored.filter((item): item is "youtube" | "instagram" => item === "youtube" || item === "instagram") : ["youtube"];
+    } catch { return ["youtube"]; }
+  });
   const [title, setTitle] = useState(() => cleanTitle(window.localStorage.getItem("dripcut.scheduleClipName") ?? ""));
   const [description, setDescription] = useState("");
   const [publishMode, setPublishMode] = useState<PublishMode>("schedule");
@@ -35,7 +41,7 @@ export function SchedulePage() {
 
   const refreshConnection = async () => {
     const statuses = await fetchSocialConnections();
-    setConnection(statuses.find((item) => item.platform === "youtube") ?? null);
+    setConnections(statuses);
   };
 
   useEffect(() => {
@@ -43,7 +49,7 @@ export function SchedulePage() {
       const ready = items.filter((item) => item.status === "completed" && item.latestJobId);
       setProjects(ready);
       setProjectId((current) => ready.some((item) => item.id === current) ? current : ready[0]?.id ?? "");
-      setConnection(statuses.find((item) => item.platform === "youtube") ?? null);
+      setConnections(statuses);
     }).catch(setError);
   }, []);
 
@@ -77,16 +83,17 @@ export function SchedulePage() {
     return () => window.clearInterval(timer);
   }, [schedule]);
 
-  const changeConnection = async () => {
-    if (!connection) return;
+  const changeConnection = async (platformName: "youtube" | "instagram") => {
+    const platform = connections.find((item) => item.platform === platformName);
+    if (!platform) return;
     setConnectionBusy(true);
     setError(null);
     try {
-      if (connection.connected) {
-        await disconnectSocial("youtube");
+      if (platform.connected) {
+        await disconnectSocial(platform.platform);
         await refreshConnection();
       } else {
-        window.location.assign(await beginSocialOAuth("youtube"));
+        window.location.assign(await beginSocialOAuth(platform.platform));
       }
     } catch (reason) {
       setError(reason);
@@ -106,7 +113,7 @@ export function SchedulePage() {
       setSchedule(await saveSchedule({
         projectId,
         artifactIds,
-        platforms: ["youtube"],
+        platforms: selectedPlatforms,
         startAt: publishMode === "now" ? "now" : startAt,
         intervalMinutes,
         title: title.trim(),
@@ -122,24 +129,32 @@ export function SchedulePage() {
     }
   };
 
-  const connected = Boolean(connection?.connected);
-  const canSubmit = connected && projectId && artifactIds.length > 0 && title.trim() && (publishMode === "now" || startAt);
+  const connectedPlatforms = selectedPlatforms.filter((platform) => connections.find((item) => item.platform === platform)?.connected);
+  const canSubmit = selectedPlatforms.length > 0 && connectedPlatforms.length === selectedPlatforms.length && projectId && artifactIds.length > 0 && title.trim() && (publishMode === "now" || startAt);
   const allSelected = clips.length > 0 && artifactIds.length === clips.length;
   const toggleAll = () => setArtifactIds(allSelected ? [] : clips.map((clip) => clip.id));
+  const togglePlatform = (platform: "youtube" | "instagram") => setSelectedPlatforms((current) => {
+    const next = current.includes(platform) ? current.filter((item) => item !== platform) : [...current, platform];
+    return next.length ? next : current;
+  });
+  useEffect(() => { window.localStorage.setItem("dripcut.schedulePlatforms", JSON.stringify(selectedPlatforms)); }, [selectedPlatforms]);
 
   return <div className="schedule-page product-page">
-    <header className="page-heading-row"><div><span className="eyebrow">YouTube publishing</span><h1>Schedule your finished clips.</h1><p>Choose one or more clips and DripCut will upload them in sequence.</p></div></header>
+    <header className="page-heading-row"><div><span className="eyebrow">Multi-platform publishing</span><h1>Schedule your finished clips.</h1><p>Publish the same clip to YouTube Shorts and Instagram Reels at the same time.</p></div></header>
     {error !== null && <CustomerError error={error} fallback="Scheduling could not be completed." />}
     <div className="connection-cards">
-      {connection && <article data-connected={connection.connected}>
-        {connection.avatarUrl ? <img className="social-avatar" src={connection.avatarUrl} alt="" /> : <Youtube />}
-        <div><strong>YouTube</strong><span>{connection.connected ? connection.detail : "Connect a YouTube channel to publish clips."}</span>{connection.channelId && <small>Channel ID: {connection.channelId}</small>}<small>{connection.connected ? "Refresh access is encrypted and stored on the server." : connection.configured ? "Google OAuth is ready." : connection.setupHint}</small></div>
-        <button disabled={!connection.configured || connectionBusy} onClick={() => void changeConnection()}>{connectionBusy ? "Working…" : connection.connected ? "Disconnect" : connection.configured ? "Connect YouTube" : "Admin setup required"}</button>
-      </article>}
+      {connections.map((item) => <article key={item.platform} data-connected={item.connected}>
+        {item.avatarUrl ? <img className="social-avatar" src={item.avatarUrl} alt="" /> : item.platform === "youtube" ? <Youtube /> : <Instagram />}
+        <div><strong>{item.platform === "youtube" ? "YouTube Shorts" : "Instagram Reels"}</strong><span>{item.connected ? item.detail : `Connect ${item.platform === "youtube" ? "a YouTube channel" : "an Instagram professional account"}.`}</span>{item.channelId && <small>Account ID: {item.channelId}</small>}<small>{item.connected ? "Access is encrypted and stored on the server." : item.configured ? "OAuth is ready." : item.setupHint}</small></div>
+        <button disabled={!item.configured || connectionBusy} onClick={() => void changeConnection(item.platform)}>{connectionBusy ? "Working…" : item.connected ? "Disconnect" : item.configured ? `Connect ${item.platform === "youtube" ? "YouTube" : "Instagram"}` : "Admin setup required"}</button>
+      </article>)}
     </div>
     <div className="schedule-workspace">
       <section className="schedule-builder">
-        {!connected && <div className="social-notice"><Youtube size={16} /> Connect YouTube before scheduling this clip.</div>}
+        {selectedPlatforms.some((platform) => !connections.find((item) => item.platform === platform)?.connected) && <div className="social-notice"><CalendarClock size={16} /> Connect every selected platform before scheduling.</div>}
+        <div className="control-group"><span>Publish to</span><div className="platform-options">
+          {(["youtube", "instagram"] as const).map((platform) => <button key={platform} type="button" data-selected={selectedPlatforms.includes(platform)} disabled={!connections.find((item) => item.platform === platform)?.connected} onClick={() => togglePlatform(platform)}>{platform === "youtube" ? <Youtube size={17} /> : <Instagram size={17} />} {platform === "youtube" ? "YouTube Shorts" : "Instagram Reels"}</button>)}
+        </div><small>Both platforms use the same clip and publish time.</small></div>
         <label><span>Finished project</span><select value={projectId} onChange={(event) => { setProjectId(event.target.value); setArtifactIds([]); }}><option value="">Choose a project</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
         <div className="schedule-clip-picker"><div className="schedule-clip-picker__header"><span>Clips to publish</span><button type="button" onClick={toggleAll} disabled={!clips.length}>{allSelected ? "Clear all" : "Select all"}</button></div>{clips.length ? clips.map((clip) => <label key={clip.id} className="schedule-clip-option"><input type="checkbox" checked={artifactIds.includes(clip.id)} onChange={() => setArtifactIds((current) => current.includes(clip.id) ? current.filter((id) => id !== clip.id) : [...current, clip.id])} /><span>{clip.index ? `Clip ${clip.index} · ` : ""}{clip.name}</span></label>) : <span className="schedule-clip-picker__empty">No finished clips found in this project.</span>}<small>{artifactIds.length} of {clips.length} clips selected</small></div>
         <label><span>Title</span><input required maxLength={100} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="YouTube title" /></label>
@@ -150,8 +165,8 @@ export function SchedulePage() {
         <button className="primary-action" disabled={!canSubmit || busy} onClick={() => void submit()}><CalendarClock size={16} /> {busy ? "Saving…" : publishMode === "now" ? `Publish ${artifactIds.length} clips` : `Schedule ${artifactIds.length} clips`}</button>
       </section>
       <section className="saved-schedule">
-        {!schedule && <div className="projects-empty projects-empty--large"><CalendarClock size={28} /><strong>No YouTube job yet</strong><span>Select one or more clips, choose an upload interval, and publish.</span></div>}
-        {schedule && <><header><CheckCircle2 size={20} /><div><strong>{schedule.posts[0]?.status === "scheduled_on_youtube" ? "Scheduled on YouTube" : "Accepted by DripCut"}</strong><span>{schedule.archiveName}</span></div><em>{friendlyStatus(schedule.posts[0]?.status)}</em></header>{schedule.posts.map((post) => <article key={post.id} data-status={post.status}><strong>{post.title || post.clipName}</strong><span>YouTube · {friendlyStatus(post.status)}</span><small>{post.publishMode === "schedule" ? new Date(post.publishAt).toLocaleString([], { timeZone: post.timezone }) : `${post.privacy} upload`}</small>{post.externalPostId && <small>Video ID: {post.externalPostId}</small>}{post.externalUrl && <a href={post.externalUrl} target="_blank" rel="noreferrer">Open on YouTube <ExternalLink size={13} /></a>}{post.errorMessage && <small>{post.errorMessage}</small>}</article>)}</>}
+        {!schedule && <div className="projects-empty projects-empty--large"><CalendarClock size={28} /><strong>No publishing job yet</strong><span>Select clips, connect one or both platforms, choose an interval, and publish.</span></div>}
+        {schedule && <><header><CheckCircle2 size={20} /><div><strong>Publishing schedule accepted</strong><span>{schedule.archiveName}</span></div><em>{friendlyStatus(schedule.posts[0]?.status)}</em></header>{schedule.posts.map((post) => <article key={post.id} data-status={post.status}><strong>{post.title || post.clipName}</strong><span>{post.platform === "youtube" ? "YouTube Shorts" : "Instagram Reels"} · {friendlyStatus(post.status)}</span><small>{post.publishMode === "schedule" ? new Date(post.publishAt).toLocaleString([], { timeZone: post.timezone }) : `${post.privacy} upload`}</small>{post.externalPostId && <small>Post ID: {post.externalPostId}</small>}{post.externalUrl && <a href={post.externalUrl} target="_blank" rel="noreferrer">Open post <ExternalLink size={13} /></a>}{post.errorMessage && <small>{post.errorMessage}</small>}</article>)}</>}
       </section>
     </div>
   </div>;

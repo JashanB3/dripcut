@@ -8,7 +8,7 @@ import { CustomerError } from "../components/CustomerError";
 import { RenderProgress } from "../components/RenderProgress";
 import { SourcePicker } from "../components/SourcePicker";
 import { SourceTimeline } from "../components/SourceTimeline";
-import type { ApiJob, ProductRoute, RuntimeSource, SourceAsset } from "../models";
+import type { ApiJob, Platform, ProductRoute, RuntimeSource, SourceAsset } from "../models";
 import { autoClipReducer, initialAutoClipState, selectedDuration, selectedSegments } from "../state/autoClipReducer";
 import { findClipTemplate } from "../templates/catalog";
 
@@ -132,13 +132,18 @@ export function AutoClipPage({ onNavigate }: { onNavigate: (route: ProductRoute)
     setAiBusy(true);
     setSourceError(null);
     try {
-      const platform = state.platforms.includes("instagram") ? "instagram" : "youtube";
-      const recommendations = await findViralMoments(
-        state.source.id,
+      const platforms: Platform[] = state.platforms.length ? state.platforms : ["youtube"];
+      const batches = await Promise.all(platforms.map((platform) => findViralMoments(
+        state.source!.id,
         platform,
         selectedDuration(state),
         Math.max(1, Math.min(20, state.count || 8)),
-      );
+      )));
+      // Both destinations are scored independently, then overlapping moments
+      // are collapsed so the user sees one clean, high-confidence shortlist.
+      const recommendations = batches.flat().sort((a, b) => b.score - a.score).filter((item, index, all) =>
+        !all.slice(0, index).some((prior) => Math.abs(prior.start - item.start) < 3 && Math.abs(prior.end - item.end) < 3),
+      ).slice(0, Math.max(1, Math.min(20, state.count || 8))).map((item, index) => ({ ...item, id: `viral-${index + 1}` }));
       dispatch({ type: "set-recommendations", recommendations });
       if (recommendations.length === 0) {
         setSourceError("AI did not find a complete standalone moment. Sequential clipping is still ready.");
