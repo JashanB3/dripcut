@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ArrowRight, Check, Eye, EyeOff, Link2, Scissors, Sparkles } from "lucide-react";
 
 import { ApiError, requestJson } from "../product/api/client";
 import { CustomerError } from "../product/components/CustomerError";
@@ -21,6 +22,7 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState<unknown>(null);
@@ -105,12 +107,18 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
         <nav><button onClick={() => navigatePath("/login")}>Log in</button><button className="auth-signup" onClick={() => navigatePath("/signup")}>Sign up free</button></nav>
       </header>
       <section className="auth-story">
-        <span className="auth-kicker">One video in. A week of content out.</span>
-        <h1>What will you <em>clip</em> today?</h1>
-        <p>Turn one long video into captioned Shorts and Reels. Upload, choose your moments, and download the ZIP.</p>
-        <ul><li>Sequential clipping works without AI</li><li>Captions built for vertical video</li><li>Your projects stay inside your workspace</li></ul>
+        <span className="auth-kicker"><Sparkles size={14} /> Less editing. More posting.</span>
+        <h1>Paste the link.<br /><em>Skip the busywork.</em></h1>
+        <p>Turn a long video into polished clips, review the moments, then schedule the whole batch to YouTube and Instagram.</p>
+        <div className="auth-workflow" aria-label="DripCut workflow preview">
+          <article><span><Link2 size={18} /></span><div><small>01 · SOURCE</small><strong>Paste any supported video link</strong></div><Check size={18} /></article>
+          <article><span><Scissors size={18} /></span><div><small>02 · CLIPS</small><strong>Pick exact cuts or viral moments</strong></div><Check size={18} /></article>
+          <article><span><ArrowRight size={18} /></span><div><small>03 · PUBLISH</small><strong>Queue YouTube and Instagram</strong></div></article>
+        </div>
+        <div className="auth-proof"><span><Check size={14} /> Start free</span><span><Check size={14} /> AI is optional</span><span><Check size={14} /> You stay in control</span></div>
       </section>
       <section className="auth-card" aria-live="polite">
+        <span className="auth-card__eyebrow">{kind === "signup" ? "Your studio is one step away" : "Your clips are waiting"}</span>
         <h2>{title}</h2><p>{subtitle}</p>
         {isPassive ? (error === null ? <div className="auth-loader" /> : null) : (
           <form onSubmit={submit}>
@@ -118,9 +126,10 @@ export function AuthPage({ kind }: { kind: AuthPageKind }) {
             {(kind === "login" || kind === "signup") && <div className="auth-divider"><span>or use your email</span></div>}
             {kind === "signup" && <label>Name<input value={name} onChange={(event) => setName(event.target.value)} required autoComplete="name" placeholder="Your creator name" /></label>}
             {kind !== "reset-password" && <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="email" placeholder="you@example.com" /></label>}
-            {kind !== "forgot-password" && <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} autoComplete={kind === "login" ? "current-password" : "new-password"} placeholder="At least 8 characters" /></label>}
+            {kind !== "forgot-password" && <div className="auth-field"><label htmlFor="auth-password">Password</label><span className="auth-password"><input id="auth-password" type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} autoComplete={kind === "login" ? "current-password" : "new-password"} placeholder="At least 8 characters" /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide entered value" : "Show entered value"}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></div>}
             {kind === "login" && <button type="button" className="auth-link" onClick={() => navigatePath("/forgot-password")}>Forgot password?</button>}
-            <button className="auth-submit" disabled={busy}>{busy ? "Please wait..." : kind === "login" ? "Log in" : kind === "signup" ? "Create free account" : kind === "forgot-password" ? "Send reset link" : "Update password"}</button>
+            <button className="auth-submit" disabled={busy}>{busy ? "Please wait..." : kind === "login" ? "Log in" : kind === "signup" ? "Create free account" : kind === "forgot-password" ? "Send reset link" : "Update password"}{!busy && (kind === "login" || kind === "signup") && <ArrowRight size={17} />}</button>
+            {kind === "signup" && <small className="auth-terms">By continuing, you agree to use only videos you own or have permission to repurpose.</small>}
           </form>
         )}
         {message && <div className="auth-message auth-message--success">{message}</div>}

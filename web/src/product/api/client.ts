@@ -461,7 +461,7 @@ export async function importYouTube(
   rightsConfirmed: boolean,
   onProgress?: (percent: number, stage: string) => void,
 ): Promise<SourceAsset> {
-  let job = jobFromPayload(await requestJson<JobPayload>("/api/jobs/youtube", {
+  let job = jobFromPayload(await requestJson<JobPayload>("/api/jobs/link", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, rights_confirmed: rightsConfirmed }),
@@ -474,7 +474,7 @@ export async function importYouTube(
   }
   if (job.status !== "succeeded" || !job.sourceId) {
     throw new ApiError(
-      job.error || "YouTube import failed.",
+      job.error || "Video-link import failed.",
       job.hint,
       job.errorCode,
     );

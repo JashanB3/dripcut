@@ -130,7 +130,11 @@ class LocalSocialStore:
                 for post in schedule.posts
                 if post.status == "scheduled"
                 and (
-                    (post.publish_mode == "schedule" and post.privacy == "public")
+                    (
+                        post.platform == "youtube"
+                        and post.publish_mode == "schedule"
+                        and post.privacy == "public"
+                    )
                     or _as_utc(post.publish_at) <= now
                 )
             )
@@ -358,7 +362,11 @@ class SupabaseSocialStore:
         return [
             post
             for post in posts
-            if (post.publish_mode == "schedule" and post.privacy == "public")
+            if (
+                post.platform == "youtube"
+                and post.publish_mode == "schedule"
+                and post.privacy == "public"
+            )
             or _as_utc(post.publish_at) <= now
         ][:25]
 

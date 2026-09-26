@@ -1,5 +1,24 @@
 import { expect, test } from "@playwright/test";
 
+test("public landing page exposes crawlable SEO structure", async ({ page, request }) => {
+  const response = await request.get("/");
+  const source = await response.text();
+  expect(source.match(/<h1[\s>]/g)).toHaveLength(1);
+  expect(source.match(/<h2[\s>]/g)?.length).toBeGreaterThanOrEqual(1);
+  expect(source).toContain('href="/pricing"');
+  expect(source).toContain('href="/about"');
+  expect(source).toContain('rel="icon"');
+
+  await page.goto("/");
+  await expect(page.locator("h1")).toHaveCount(1);
+  await expect(page.locator("h2")).not.toHaveCount(0);
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://dripcut.onrender.com/");
+
+  const llms = await request.get("/llms.txt");
+  expect(llms.ok()).toBe(true);
+  expect(await llms.text()).toContain("# DripCut");
+});
+
 for (const viewport of [{ width: 390, height: 844 }, { width: 412, height: 915 }, { width: 768, height: 1024 }]) {
   test(`launch surface fits ${viewport.width}px screens`, async ({ page }) => {
     await page.setViewportSize(viewport);

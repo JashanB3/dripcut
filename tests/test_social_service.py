@@ -14,7 +14,13 @@ from dripcut.core.errors import SocialProviderError, ValidationError
 from dripcut.core.events import EventBus
 from dripcut.engines.export.queue import LocalJobQueue
 from dripcut.services.social_service import SocialScheduleService
-from dripcut.social.models import OAuthResult, PublishResult, ScheduledPost, SocialCredentials
+from dripcut.social.models import (
+    OAuthResult,
+    PublishResult,
+    ScheduledPost,
+    SocialCredentials,
+    SocialSchedule,
+)
 from dripcut.social.providers import YouTubeProvider
 from dripcut.social.store import LocalSocialStore, SupabaseSocialStore
 from dripcut.tenancy.models import Principal
@@ -482,6 +488,27 @@ def test_social_store_recovers_posts_interrupted_during_upload(paths) -> None:
     recovered = store.schedule("local", schedule.id)
     assert recovered is not None
     assert recovered.posts[0].status == "scheduled"
+
+
+def test_future_instagram_posts_wait_while_youtube_uses_native_scheduling(paths) -> None:
+    store = LocalSocialStore(paths.projects / "social-due-platforms")
+    future = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
+    schedule = SocialSchedule(
+        id="schedule-platforms",
+        project_id="project-1",
+        archive="object://clips/source.mp4",
+        archive_name="source.mp4",
+        created_at=datetime.now(UTC).timestamp(),
+        posts=[
+            ScheduledPost(platform="instagram", clip_name="clip.mp4", publish_at=future, caption="Reel", status="scheduled", schedule_id="schedule-platforms"),
+            ScheduledPost(platform="youtube", clip_name="clip.mp4", publish_at=future, caption="Short", status="scheduled", schedule_id="schedule-platforms", privacy="public", publish_mode="schedule"),
+        ],
+    )
+    store.save_schedule(schedule)
+
+    due = store.due_posts(datetime.now(UTC))
+
+    assert [post.platform for post in due] == ["youtube"]
 
 
 def test_dispatch_due_scopes_manual_dispatch_to_current_workspace(paths) -> None:

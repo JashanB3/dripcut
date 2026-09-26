@@ -1199,8 +1199,8 @@ def create_app(
             reservation.release()
             raise
 
-    @app.post("/api/sources/youtube", response_model=SourceAssetResponse, status_code=201)
-    def import_youtube(
+    @app.post("/api/sources/link", response_model=SourceAssetResponse, status_code=201)
+    def import_video_link(
         payload: YouTubeImportRequest,
         principal: Principal = principal_dependency,
     ) -> SourceAssetResponse:
@@ -1219,8 +1219,16 @@ def create_app(
             reservation.release()
             raise
 
-    @app.post("/api/jobs/youtube", response_model=JobResponse, status_code=202)
-    def queue_youtube_import(
+    @app.post("/api/sources/youtube", response_model=SourceAssetResponse, status_code=201)
+    def import_youtube(
+        payload: YouTubeImportRequest,
+        principal: Principal = principal_dependency,
+    ) -> SourceAssetResponse:
+        clip_service.container.youtube.validate_url(payload.url)
+        return import_video_link(payload, principal)
+
+    @app.post("/api/jobs/link", response_model=JobResponse, status_code=202)
+    def queue_video_link_import(
         payload: YouTubeImportRequest,
         background_tasks: BackgroundTasks,
         idempotency_key: Annotated[
@@ -1231,7 +1239,7 @@ def create_app(
         if acquisition_mode == "worker":
             # Preserve the public request/response contract while delegating media
             # acquisition to the trusted polling worker.
-            value = clip_service.container.youtube.validate_url(payload.url)
+            value = clip_service.container.youtube.validate_video_url(payload.url)
             project = clip_service.create_youtube_project(value, rights_confirmed=payload.rights_confirmed)
             register_project(principal, project)
             job = AcquisitionJob(
@@ -1239,7 +1247,7 @@ def create_app(
                 owner_id=principal.user.id,
                 project_id=project.id,
                 source_url=value,
-                metadata={"rights_confirmed": True, "stage": "Queued for YouTube worker"},
+                metadata={"rights_confirmed": True, "stage": "Queued for video-link worker"},
             )
             acquisition_jobs.create(job)
             return acquisition_response(job)
@@ -1269,6 +1277,18 @@ def create_app(
         except Exception:
             reservation.release()
             raise
+
+    @app.post("/api/jobs/youtube", response_model=JobResponse, status_code=202)
+    def queue_youtube_import(
+        payload: YouTubeImportRequest,
+        background_tasks: BackgroundTasks,
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key", max_length=200)
+        ] = None,
+        principal: Principal = principal_dependency,
+    ) -> JobResponse:
+        clip_service.container.youtube.validate_url(payload.url)
+        return queue_video_link_import(payload, background_tasks, idempotency_key, principal)
 
     @app.get("/api/worker/jobs/next", response_model=None)
     def claim_worker_job(request: Request) -> Response | dict[str, object]:

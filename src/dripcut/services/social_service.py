@@ -390,12 +390,11 @@ class SocialScheduleService:
                     hint=f"Connect {disconnected[0].title()} before scheduling this clip.",
                 )
         posts: list[ScheduledPost] = []
-        slot = 0
         normalized_assets = [
             ("", item[0], item[1]) if len(item) == 2 else (item[0], item[1], item[2])
             for item in clip_assets
         ]
-        for artifact_id, clip, asset_reference in normalized_assets:
+        for slot, (artifact_id, clip, asset_reference) in enumerate(normalized_assets):
             clean_name = Path(clip).stem
             for platform in selected:
                 # A slot represents one clip. When both platforms are selected,
@@ -429,7 +428,6 @@ class SocialScheduleService:
                         status="scheduled" if account else "draft",
                     )
                 )
-            slot += 1
         schedule = SocialSchedule(
             id=schedule_id,
             project_id=project_id,
@@ -441,11 +439,11 @@ class SocialScheduleService:
             owner_id=owner_id,
         )
         self.store.save_schedule(schedule, access_token=access_token)
-        if require_connected:
-            for post in posts:
-                self._enqueue(post, access_token=access_token)
-        else:
-            self.dispatch_due(principal=principal)
+        # YouTube accepts a future publishAt during upload, while Instagram's
+        # content-publishing API must be called when the post is actually due.
+        # The store's due filter preserves that distinction for both immediate
+        # dispatch and the background scheduler.
+        self.dispatch_due(principal=principal)
         return schedule
 
     def latest_schedule(self, principal: Principal | None = None) -> SocialSchedule | None:
@@ -616,7 +614,7 @@ class SocialScheduleService:
                 post.error_message = None
                 post.last_error_code = None
                 self.store.update_post(post, access_token=access_token)
-                job.set_progress(1.0, _status_label(result.status))
+                job.set_progress(1.0, _status_label(result.status, post.platform))
                 return JobResult(
                     outputs=[],
                     message=f"Published {post.clip_name} to {post.platform}.",
@@ -631,8 +629,8 @@ class SocialScheduleService:
                 )
             except Exception as error:
                 post.status = "failed"
-                post.last_error_code = _safe_error_code(error)
-                post.error_message = _safe_publish_error(error)
+                post.last_error_code = _safe_error_code(error, post.platform)
+                post.error_message = _safe_publish_error(error, post.platform)
                 self.store.update_post(post, access_token=access_token)
                 raise
 
@@ -779,23 +777,26 @@ def _as_utc_iso(value: str) -> str:
     return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _safe_error_code(error: Exception) -> str:
+def _safe_error_code(error: Exception, platform: PlatformName) -> str:
     if isinstance(error, SocialProviderError):
-        return "YOUTUBE_CONNECTION_ERROR"
+        return f"{platform.upper()}_CONNECTION_ERROR"
     if isinstance(error, ValidationError):
         return "SCHEDULE_ARTIFACT_ERROR"
-    return "YOUTUBE_UPLOAD_ERROR"
+    return f"{platform.upper()}_UPLOAD_ERROR"
 
 
-def _safe_publish_error(error: Exception) -> str:
+def _safe_publish_error(error: Exception, platform: PlatformName) -> str:
+    label = "Instagram" if platform == "instagram" else "YouTube"
     if isinstance(error, SocialProviderError):
-        return "YouTube could not accept this upload. Reconnect YouTube and try again."
+        return f"{label} could not accept this upload. Reconnect {label} and try again."
     if isinstance(error, ValidationError):
         return str(error)[:300]
-    return "YouTube upload failed temporarily. DripCut will retry safely."
+    return f"{label} upload failed temporarily. DripCut will retry safely."
 
 
-def _status_label(status: str) -> str:
+def _status_label(status: str, platform: PlatformName) -> str:
+    if platform == "instagram" and status == "published":
+        return "Published to Instagram"
     return {
         "scheduled_on_youtube": "Scheduled on YouTube",
         "uploaded": "Uploaded to YouTube",

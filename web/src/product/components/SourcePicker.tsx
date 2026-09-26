@@ -1,4 +1,4 @@
-import { AlertTriangle, FileVideo2, Link2, LoaderCircle, RotateCcw, Upload, Youtube } from "lucide-react";
+import { AlertTriangle, FileVideo2, Link2, LoaderCircle, RotateCcw, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 
 export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtubeFailed }: {
@@ -17,8 +17,8 @@ export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtube
   const submitUrl = () => {
     try {
       const parsed = new URL(url.trim());
-      const validHost = ["youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com"].includes(parsed.hostname);
-      if (validHost && rightsConfirmed) onYouTube(url.trim(), true);
+      const validLink = ["http:", "https:"].includes(parsed.protocol) && Boolean(parsed.hostname);
+      if (validLink && rightsConfirmed) onYouTube(url.trim(), true);
       else setUrlState("invalid");
     } catch {
       setUrlState("invalid");
@@ -30,7 +30,7 @@ export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtube
       <div className="source-step__intro">
         <span className="eyebrow">Step 1 · Source</span>
         <h1>Start with one long video.</h1>
-        <p>Upload it here or check a supported YouTube URL. Nothing is analyzed unless you ask for AI recommendations later.</p>
+        <p>Upload it here or paste a public link from a supported video website. Nothing is analyzed unless you ask for AI recommendations later.</p>
       </div>
       <div className="source-options">
         <button className="upload-source-card" disabled={busy !== null} onClick={() => input.current?.click()}>
@@ -41,9 +41,9 @@ export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtube
         </button>
         <div className="source-divider"><span>or</span></div>
         <div className="youtube-source-card">
-          <span className="youtube-source-card__icon"><Youtube size={25} /></span>
-          <strong>Paste YouTube link</strong>
-          <p>{busy === "youtube" ? `${stage || "Connecting to YouTube"} · ${progress}%` : "Check a public YouTube URL before importing."}</p>
+          <span className="youtube-source-card__icon"><Link2 size={25} /></span>
+          <strong>Paste a video link</strong>
+          <p>{busy === "youtube" ? `${stage || "Connecting to the video source"} · ${progress}%` : "YouTube and hundreds of supported public video sites."}</p>
           <label data-state={urlState}>
             <Link2 size={17} />
             <input
@@ -51,11 +51,11 @@ export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtube
               onChange={(event) => { setUrl(event.target.value); setUrlState("idle"); }}
               disabled={busy !== null}
               onKeyDown={(event) => event.key === "Enter" && submitUrl()}
-              placeholder="https://youtube.com/watch?v=..."
-              aria-label="YouTube video URL"
+              placeholder="https://video-site.com/watch/..."
+              aria-label="Public video URL"
             />
           </label>
-          {urlState === "invalid" && <small className="source-error">Enter a valid YouTube URL and confirm your permission.</small>}
+          {urlState === "invalid" && <small className="source-error">Enter a valid public video URL and confirm your permission.</small>}
           <label className="rights-confirmation">
             <input
               type="checkbox"
@@ -81,7 +81,7 @@ export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtube
             <small>Retry the public link, or upload a copy you are allowed to use. Your selected template and clip settings stay in place.</small>
           </span>
           <button disabled={busy !== null || !url.trim() || !rightsConfirmed} onClick={submitUrl}>
-            <RotateCcw size={15} /> Retry YouTube
+            <RotateCcw size={15} /> Retry link
           </button>
           <button className="youtube-recovery__upload" disabled={busy !== null} onClick={() => input.current?.click()}>
             <Upload size={15} /> Upload video instead

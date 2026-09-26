@@ -415,7 +415,7 @@ class InstagramProvider:
         pages = self.client.get(
             f"{self.graph_root}/me/accounts",
             params={
-                "fields": "id,name,access_token,instagram_business_account{id,username}",
+                "fields": "id,name,access_token,instagram_business_account{id,username,profile_picture_url}",
                 "access_token": user_token,
             },
         )
@@ -440,6 +440,7 @@ class InstagramProvider:
             extra={
                 "instagram_user_id": str(instagram["id"]),
                 "page_id": str(page["id"]),
+                "avatar_url": str(instagram.get("profile_picture_url") or ""),
             },
         )
         return OAuthResult(
@@ -493,7 +494,12 @@ class InstagramProvider:
         media_id = str(publish.json().get("id") or "")
         if not media_id:
             raise SocialProviderError("Instagram did not return a published media id.")
-        return PublishResult(external_post_id=media_id)
+        permalink = self.client.get(
+            f"{self.graph_root}/{media_id}",
+            params={"fields": "permalink", "access_token": credentials.access_token},
+        )
+        url = None if permalink.is_error else str(permalink.json().get("permalink") or "") or None
+        return PublishResult(external_post_id=media_id, url=url, status="published")
 
     def revoke(self, credentials: SocialCredentials) -> None:
         del credentials

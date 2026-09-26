@@ -6,6 +6,7 @@
     <meta name="theme-color" content="#6f35f2" />
     <meta name="description" content="Paste a video link and skip the repetitive editing. DripCut creates clips, adds captions, and schedules posts from one focused workspace." />
     <meta name="robots" content="index,follow" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="canonical" href="https://dripcut.onrender.com/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="DripCut" />
@@ -33,7 +34,58 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="landing-page">
+        <header class="landing-nav">
+          <a class="landing-brand" href="/" aria-label="DripCut home"><span>dc</span><strong>DripCut</strong></a>
+          <nav aria-label="Main navigation">
+            <a href="/">Product</a>
+            <a href="/#how-it-works">How it works</a>
+            <a href="/pricing">Pricing</a>
+            <a href="/about">About</a>
+          </nav>
+          <div class="landing-auth-actions"><a href="/login">Log in</a><a class="landing-gradient-button" href="/signup">Try DripCut free</a></div>
+        </header>
+        <main>
+          <section class="landing-hero landing-hero--lazy">
+            <div class="landing-hero__copy">
+              <span class="landing-pill">Less editing. More posting.</span>
+              <h1>Paste the link.<br /><span>Skip the busywork.</span></h1>
+              <p>DripCut turns one long video into clipped, captioned, scheduled posts. Bring a public YouTube link or upload a video you have permission to use, review the moments that matter, and let the repetitive production work happen in one focused workspace.</p>
+              <a class="landing-gradient-button" href="/signup">Make my first clips</a>
+              <p>Start free. AI is optional. You approve every clip before downloading or publishing it.</p>
+            </div>
+          </section>
+
+          <section class="landing-section" id="how-it-works">
+            <span class="landing-section__eyebrow">How DripCut works</span>
+            <h2>Go from one long video to a ready-to-publish content plan</h2>
+            <p>Start by pasting a supported video link or uploading your own file. Choose exact durations for clean sequential clips, or ask DripCut to suggest useful moments when you want help finding the strongest sections. Add readable captions and select portrait, square, or landscape output for the channels you use.</p>
+            <p>Every result stays under your control. Preview the selected timestamps, keep the clips that fit your message, and download them individually or as a batch. There is no requirement to use AI and no need to rebuild the same crop, caption, and export steps for every short video.</p>
+          </section>
+
+          <section class="landing-section">
+            <span class="landing-section__eyebrow">Publishing without the spreadsheet</span>
+            <h2>Approve your clips, schedule the batch, and move on</h2>
+            <p>Connect an eligible YouTube or Instagram account, choose the finished clips, and set the time between posts. DripCut prepares the publishing queue so you can review the channel, caption, privacy setting, date, and time before confirming anything. You can publish to one platform or place the same approved clip on both calendars.</p>
+            <p>The result is a shorter path from finished long-form video to consistent short-form publishing. Creators keep the decisions that need taste and context while software handles timestamping, repeated exports, filenames, captions, and posting intervals.</p>
+            <a href="/pricing">Compare DripCut plans and monthly credits</a>
+          </section>
+
+          <section class="landing-section">
+            <span class="landing-section__eyebrow">Built for responsible repurposing</span>
+            <h2>Use videos you own or have permission to repurpose</h2>
+            <p>DripCut is designed for your own recordings, licensed footage, client work, and public videos you are authorized to reuse. A link makes importing convenient; it does not change who owns the source. You decide what may be clipped and where the finished work may be published.</p>
+            <p>Want to know why we built a lighter video workflow? Read <a href="/about">about DripCut and our approach</a>, or <a href="/signup">create a free account</a> to try the complete workflow with your own video.</p>
+          </section>
+        </main>
+        <footer class="landing-footer">
+          <a class="landing-brand" href="/" aria-label="DripCut home"><span>dc</span><strong>DripCut</strong></a>
+          <p>Paste the link. Skip the busywork.</p>
+          <nav aria-label="Footer navigation"><a href="/">Product</a><a href="/pricing">Pricing</a><a href="/about">About</a></nav>
+        </footer>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
     <script id="messenger-widget-b" src="https://cdn.botpenguin.com/website-bot.js" defer>6a8c11c2ef3c88df50eec6af,69c680abc385cc8777061c65</script>
   </body>

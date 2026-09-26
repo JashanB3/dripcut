@@ -86,7 +86,7 @@ class WebClipService:
         self, url: str, *, rights_confirmed: bool = False
     ) -> SourceAssetResponse:
         value = self._require_youtube_permission(url, rights_confirmed)
-        self._require_disk_capacity("import a YouTube video")
+        self._require_disk_capacity("import a linked video")
         project = self._start_youtube_project(value)
         try:
             result = self.container.youtube.import_video(value)
@@ -99,7 +99,7 @@ class WebClipService:
     def create_youtube_project(self, url: str, *, rights_confirmed: bool) -> ProjectResponse:
         """Create the normal project shell before a trusted worker acquires media."""
         value = self._require_youtube_permission(url, rights_confirmed)
-        self._require_disk_capacity("queue a YouTube import")
+        self._require_disk_capacity("queue a video-link import")
         return self._project_response(self._start_youtube_project(value).summary())
 
     def finalize_worker_youtube(
@@ -119,7 +119,8 @@ class WebClipService:
             record = self.sources.save_path(staging, kind="youtube", title=title)  # type: ignore[attr-defined]
             record.channel = channel
             record.youtube_url = url
-            return self._finish_source(record, project=project, project_type="youtube_short")
+            project_type = "youtube_short" if self.container.youtube.is_youtube_url(url) else "video_link"
+            return self._finish_source(record, project=project, project_type=project_type)
         finally:
             staging.unlink(missing_ok=True)
 
@@ -138,7 +139,7 @@ class WebClipService:
         project = self._start_youtube_project(value)
         job = Job(
             kind=cast(JobKind, JobKind.DOWNLOAD),
-            title="Import YouTube video",
+            title="Import video link",
             metadata={
                 "youtube_video_id": self.container.youtube.video_id(value),
                 "project_id": project.id,
@@ -191,7 +192,7 @@ class WebClipService:
                     on_success()
                 return JobResult(
                     outputs=[Path(source.path)],
-                    message="YouTube video imported and verified.",
+                    message="Video link imported and verified.",
                     data={"source_id": response.id, "project_id": project.id},
                 )
             except Exception:
@@ -239,7 +240,8 @@ class WebClipService:
             )
             record.channel = metadata.channel
             record.youtube_url = url
-            return self._finish_source(record, project=project, project_type="youtube_short")
+            project_type = "youtube_short" if self.container.youtube.is_youtube_url(url) else "video_link"
+            return self._finish_source(record, project=project, project_type=project_type)
         finally:
             # yt-dlp gets an isolated job directory. Once the verified source is
             # copied into the source store, the acquisition scratch data is dead.
@@ -1376,7 +1378,7 @@ class WebClipService:
             )
 
     def _require_youtube_permission(self, url: str, confirmed: bool) -> str:
-        value = self.container.youtube.validate_url(url)
+        value = self.container.youtube.validate_video_url(url)
         if not confirmed:
             raise ValidationError(
                 "Confirm that you have permission to use this video.",
@@ -1388,8 +1390,9 @@ class WebClipService:
 
     def _start_youtube_project(self, url: str) -> Project:
         video_id = self.container.youtube.video_id(url)
-        project = self.container.projects.create(f"YouTube {video_id}")
-        project.project_type = "youtube_short"
+        label = "YouTube" if self.container.youtube.is_youtube_url(url) else "Video"
+        project = self.container.projects.create(f"{label} {video_id}")
+        project.project_type = "youtube_short" if label == "YouTube" else "video_link"
         project.status = "importing"
         project.content_rights_confirmed = True
         project.content_rights_confirmed_at = time.time()

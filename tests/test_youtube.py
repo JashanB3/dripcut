@@ -48,6 +48,25 @@ def test_validate_url_rejects_other_inputs(url: str) -> None:
         YouTubeService.validate_url(url)
 
 
+def test_validate_video_url_accepts_public_non_youtube_sites(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "dripcut.services.youtube_service.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
+    url = "https://videos.example/watch/launch-demo"
+    assert YouTubeService.validate_video_url(url) == url
+    assert YouTubeService.video_id(url) == "videos-example-watch-launch-demo"
+
+
+def test_validate_video_url_rejects_private_network_targets(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "dripcut.services.youtube_service.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("127.0.0.1", 443))],
+    )
+    with pytest.raises(ValidationError, match="Private or local"):
+        YouTubeService.validate_video_url("https://private.example/video.mp4")
+
+
 def _install_fake_ytdlp(monkeypatch, youtube_dl: type, download_error: type[Exception] = RuntimeError) -> None:
     fake = types.ModuleType("yt_dlp")
     fake.YoutubeDL = youtube_dl

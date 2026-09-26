@@ -166,7 +166,7 @@ export function SchedulePage() {
       </section>
       <section className="saved-schedule">
         {!schedule && <div className="projects-empty projects-empty--large"><CalendarClock size={28} /><strong>No publishing job yet</strong><span>Select clips, connect one or both platforms, choose an interval, and publish.</span></div>}
-        {schedule && <><header><CheckCircle2 size={20} /><div><strong>Publishing schedule accepted</strong><span>{schedule.archiveName}</span></div><em>{friendlyStatus(schedule.posts[0]?.status)}</em></header>{schedule.posts.map((post) => <article key={post.id} data-status={post.status}><strong>{post.title || post.clipName}</strong><span>{post.platform === "youtube" ? "YouTube Shorts" : "Instagram Reels"} · {friendlyStatus(post.status)}</span><small>{post.publishMode === "schedule" ? new Date(post.publishAt).toLocaleString([], { timeZone: post.timezone }) : `${post.privacy} upload`}</small>{post.externalPostId && <small>Post ID: {post.externalPostId}</small>}{post.externalUrl && <a href={post.externalUrl} target="_blank" rel="noreferrer">Open post <ExternalLink size={13} /></a>}{post.errorMessage && <small>{post.errorMessage}</small>}</article>)}</>}
+        {schedule && <><header><CheckCircle2 size={20} /><div><strong>Publishing schedule accepted</strong><span>{schedule.archiveName}</span></div><em>{friendlyStatus(schedule.posts[0]?.status, schedule.posts[0]?.platform)}</em></header>{schedule.posts.map((post) => <article key={post.id} data-status={post.status}><strong>{post.title || post.clipName}</strong><span>{post.platform === "youtube" ? "YouTube Shorts" : "Instagram Reels"} · {friendlyStatus(post.status, post.platform)}</span><small>{post.publishMode === "schedule" ? new Date(post.publishAt).toLocaleString([], { timeZone: post.timezone }) : `${post.privacy} upload`}</small>{post.externalPostId && <small>Post ID: {post.externalPostId}</small>}{post.externalUrl && <a href={post.externalUrl} target="_blank" rel="noreferrer">Open post <ExternalLink size={13} /></a>}{post.errorMessage && <small>{post.errorMessage}</small>}</article>)}</>}
       </section>
     </div>
   </div>;
@@ -185,6 +185,6 @@ function dateInput(minutesAhead: number): string {
 function defaultFutureTime(): string { return dateInput(10); }
 function minimumFutureTime(): string { return dateInput(1); }
 
-function friendlyStatus(status = "scheduled"): string {
-  return ({ scheduled: "Queued", uploading: "Uploading to YouTube", uploaded: "Uploaded privately", youtube_processing: "YouTube processing", scheduled_on_youtube: "Scheduled on YouTube", published: "Published", failed: "Needs attention", cancelled: "Cancelled", draft: "Connect YouTube" } as Record<string, string>)[status] ?? status;
+function friendlyStatus(status = "scheduled", platform?: "youtube" | "instagram"): string {
+  return ({ scheduled: "Queued", uploading: `Uploading to ${platform === "instagram" ? "Instagram" : "YouTube"}`, uploaded: "Uploaded privately", youtube_processing: "YouTube processing", scheduled_on_youtube: "Scheduled on YouTube", published: platform === "instagram" ? "Published to Instagram" : "Published", failed: "Needs attention", cancelled: "Cancelled", draft: `Connect ${platform === "instagram" ? "Instagram" : "YouTube"}` } as Record<string, string>)[status] ?? status;
 }

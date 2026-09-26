@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import importlib.metadata
+import ipaddress
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -50,6 +52,8 @@ _SENSITIVE_DETAIL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _STRATEGY_LABELS = {
+    "browser_cookie": "fresh browser session",
+    "generic": "site extractor",
     "web_embedded": "embedded web",
     "mweb_pot": "mweb + PoT",
     "web_safari_hls": "Safari HLS",
@@ -131,6 +135,7 @@ class _ExtractionStrategy:
     use_pot_provider: bool = False
     pot_provider_mode: Literal["http", "script"] | None = None
     use_cookies: bool = False
+    use_browser_cookies: bool = False
 
 
 @dataclass(slots=True)
@@ -364,7 +369,7 @@ class _YtDlpLogger:
 
 
 class YouTubeImportService:
-    """Validate, inspect, download and verify ordinary public YouTube videos."""
+    """Validate, inspect, download and verify public video links with yt-dlp."""
 
     def __init__(self, paths: AppPaths, *, sleep: Callable[[float], None] = time.sleep) -> None:
         self.paths = paths
@@ -384,16 +389,56 @@ class YouTubeImportService:
         )
 
     @staticmethod
+    def validate_video_url(url: str) -> str:
+        value = (url or "").strip()
+        if not value:
+            raise ValidationError("Paste a public video link first.")
+        parsed = urlparse(value)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in {None, 80, 443}
+            or host == "localhost"
+            or host.endswith((".localhost", ".local", ".internal"))
+        ):
+            raise ValidationError(
+                "That is not a supported public video link.",
+                hint="Use a public http or https page that contains a video.",
+            )
+        try:
+            addresses = {
+                item[4][0]
+                for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+            }
+        except socket.gaierror as error:
+            raise ValidationError(
+                "That video website could not be reached.",
+                hint="Check the link and try again.",
+            ) from error
+        if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+            raise ValidationError("Private or local network video links are not supported.")
+        if YouTubeImportService.is_youtube_url(value):
+            video_id = YouTubeImportService.video_id(value)
+            if not re.fullmatch(r"[A-Za-z0-9_-]{3,64}", video_id):
+                raise ValidationError(
+                    "That YouTube link does not identify a video.",
+                    hint="Paste a watch, Shorts, embed, or youtu.be video URL.",
+                )
+        return value
+
+    @staticmethod
     def validate_url(url: str) -> str:
+        """Preserve the legacy YouTube-only validation contract."""
         value = (url or "").strip()
         if not value:
             raise ValidationError("Paste a YouTube video link first.")
         parsed = urlparse(value)
-        host = (parsed.hostname or "").lower().rstrip(".")
-        allowed = host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
         if (
             parsed.scheme != "https"
-            or not allowed
+            or not YouTubeImportService.is_youtube_url(value)
             or parsed.username is not None
             or parsed.password is not None
             or parsed.port not in {None, 443}
@@ -411,6 +456,11 @@ class YouTubeImportService:
         return value
 
     @staticmethod
+    def is_youtube_url(url: str) -> bool:
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
+        return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+
+    @staticmethod
     def video_id(url: str) -> str:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower().rstrip(".")
@@ -422,7 +472,12 @@ class YouTubeImportService:
         parts = [part for part in parsed.path.split("/") if part]
         if len(parts) >= 2 and parts[0] in {"shorts", "embed", "live"}:
             return parts[1]
-        return ""
+        if YouTubeImportService.is_youtube_url(url):
+            return ""
+        fallback = re.sub(
+            r"[^A-Za-z0-9_-]+", "-", f"{host}-{parsed.path.strip('/')}"
+        ).strip("-")
+        return fallback[:64] or host[:64]
 
     def diagnostics(self) -> YouTubeDiagnostics:
         runtimes = _javascript_runtimes()
@@ -444,7 +499,7 @@ class YouTubeImportService:
             po_token_provider_available=_distribution_version("bgutil-ytdlp-pot-provider") is not None,
             po_token_provider_configured=self._pot_provider_mode() is not None,
             po_token_provider_mode=self._pot_provider_mode(),
-            cookie_fallback_configured=cookie_file is not None,
+            cookie_fallback_configured=cookie_file is not None or self._browser_cookies() is not None,
             proxy_configured=bool(os.environ.get("DRIPCUT_YOUTUBE_PROXY")),
             strategies=strategies,
             last_successful_strategy=state.last_successful_strategy,
@@ -454,8 +509,13 @@ class YouTubeImportService:
             last_attempted_strategies=state.last_attempted_strategies,
         )
 
-    def select_strategy(self) -> list[_ExtractionStrategy]:
+    def select_strategy(self, url: str | None = None) -> list[_ExtractionStrategy]:
         strategies: list[_ExtractionStrategy] = []
+        if self._browser_cookies() is not None:
+            strategies.append(_ExtractionStrategy("browser_cookie", use_browser_cookies=True))
+        if url and not self.is_youtube_url(url):
+            strategies.append(_ExtractionStrategy("generic"))
+            return strategies
         # A configured operator cookie jar is the only strategy that consistently
         # works from the production GCE region.  Trying four known-blocked public
         # clients first added roughly a minute to every successful import.
@@ -549,7 +609,7 @@ class YouTubeImportService:
         on_progress: Callable[[float, str], None] | None = None,
         import_id: str | None = None,
     ) -> YouTubeMetadata:
-        value = self.validate_url(url)
+        value = self.validate_video_url(url)
         resolved_import_id = import_id or uuid4().hex[:12]
         if on_progress:
             on_progress(0.02, "Fetching video information")
@@ -557,7 +617,7 @@ class YouTubeImportService:
         last_detail = ""
         with self._state_lock:
             self._state.last_attempted_strategies = ()
-        for strategy in self.select_strategy():
+        for strategy in self.select_strategy(value):
             try:
                 info = self._extract(
                     value,
@@ -607,13 +667,13 @@ class YouTubeImportService:
         *,
         on_progress: Callable[[float, str], None] | None = None,
     ) -> YouTubeImportResult:
-        value = self.validate_url(url)
+        value = self.validate_video_url(url)
         import_id = uuid4().hex[:12]
         started = time.monotonic()
         metadata = self.fetch_metadata(value, on_progress=on_progress, import_id=import_id)
         metadata_seconds = time.monotonic() - started
         destination = ensure_dir(self.paths.temp / "youtube" / f"{int(time.time())}-{import_id}")
-        strategies = self.select_strategy()
+        strategies = self.select_strategy(value)
         last_error: YouTubeImportError | None = None
         last_detail = ""
         download_started = time.monotonic()
@@ -623,7 +683,7 @@ class YouTubeImportService:
             shutil.rmtree(attempt_dir, ignore_errors=True)
             ensure_dir(attempt_dir)
             if on_progress:
-                stage = "Connecting to YouTube" if attempt == 1 else f"Retrying with {strategy.name}"
+                stage = "Connecting to the video source" if attempt == 1 else f"Retrying with {strategy.name}"
                 on_progress(0.08, stage)
             try:
                 info = self._extract(
@@ -761,7 +821,7 @@ class YouTubeImportService:
             from yt_dlp.utils import DownloadError
         except ImportError as error:
             raise DependencyError(
-                "YouTube import is not installed.",
+                "Video-link import is not installed.",
                 hint="Install DripCut again so the yt-dlp dependency is available.",
             ) from error
 
@@ -776,7 +836,7 @@ class YouTubeImportService:
         except Exception as error:  # noqa: BLE001 - normalize third-party errors
             raise _normalize_error(error) from error
         if not isinstance(info, dict):
-            raise YouTubeImportError("DOWNLOAD_FAILED", "YouTube returned no usable video information.")
+            raise YouTubeImportError("DOWNLOAD_FAILED", "The link returned no usable video information.")
         return info
 
     def _options(
@@ -831,6 +891,8 @@ class YouTubeImportService:
             options["extractor_args"] = extractor_args
         if strategy.use_cookies and (cookie_file := self._cookie_file()):
             options["cookiefile"] = str(cookie_file)
+        if strategy.use_browser_cookies and (browser_cookies := self._browser_cookies()):
+            options["cookiesfrombrowser"] = browser_cookies
 
         if destination is None:
             options["skip_download"] = True
@@ -881,7 +943,7 @@ class YouTubeImportService:
         video_id = str(info.get("id") or YouTubeImportService.video_id(fallback_url))
         return YouTubeMetadata(
             video_id=video_id,
-            title=str(info.get("title") or f"YouTube video {video_id}"),
+            title=str(info.get("title") or f"Video {video_id}"),
             duration=float(info.get("duration") or 0),
             channel=str(info.get("channel") or info.get("uploader") or "") or None,
             webpage_url=str(info.get("webpage_url") or fallback_url),
@@ -973,6 +1035,16 @@ class YouTubeImportService:
             return None
         path = Path(configured).expanduser()
         return path if path.is_file() else None
+
+    @staticmethod
+    def _browser_cookies() -> tuple[str, str | None, str | None, str | None] | None:
+        """Read fresh cookies directly from an operator-controlled worker browser."""
+        browser = os.environ.get("DRIPCUT_YOUTUBE_COOKIES_FROM_BROWSER", "").strip().lower()
+        supported = {"brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale"}
+        if browser not in supported:
+            return None
+        profile = os.environ.get("DRIPCUT_YOUTUBE_BROWSER_PROFILE", "").strip() or None
+        return (browser, profile, None, None)
 
 
 # Preserve the established container and desktop-page import name.

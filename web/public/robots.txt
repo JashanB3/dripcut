@@ -1,4 +1,22 @@
 User-agent: *
 Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /ai-editor
+Disallow: /ai-thumbnail
+Disallow: /auth/
+Disallow: /auto-clip
+Disallow: /create
+Disallow: /forgot-password
+Disallow: /home
+Disallow: /login
+Disallow: /projects
+Disallow: /reset-password
+Disallow: /schedule
+Disallow: /script
+Disallow: /settings
+Disallow: /signup
+Disallow: /templates
+Disallow: /usage
 
 Sitemap: https://dripcut.onrender.com/sitemap.xml

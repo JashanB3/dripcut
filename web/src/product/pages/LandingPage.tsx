@@ -30,15 +30,12 @@ const MRBEAST_CLIP_THUMBNAILS = [
 ] as const;
 
 const plans = [
-  { name: "Free", price: "$0", detail: "Try the complete workflow", features: ["50 render credits monthly", "10 clips per project", "1 connected channel", "7-day clip history"] },
-  { name: "Starter", price: "$9", detail: "For a lighter weekly workload", features: ["300 render credits monthly", "YouTube + Instagram scheduling", "30-day clip history", "Add credits when needed"] },
-  { name: "Creator", price: "$19", detail: "For a hands-off content rhythm", features: ["1,000 render credits monthly", "AI moment suggestions", "Multi-platform scheduling", "Priority render queue"] },
-  { name: "Pro", price: "$49", detail: "For publishing at volume", features: ["3,000 render credits monthly", "Multiple connected channels", "Priority support", "Advanced workflows"] },
+  { name: "Early access", price: "$0", detail: "Everything is free while DripCut is in early access", features: ["Video-link importing and uploads", "Standard and AI-assisted clipping", "Captions and multi-format exports", "YouTube + Instagram scheduling"] },
 ] as const;
 
 const faqs = [
   ["Do I have to use AI?", "No. You can choose exact durations and generate sequential clips without AI, or use AI suggestions when you want help finding moments."],
-  ["Can I use a YouTube link?", "Yes. Paste a supported public YouTube URL, or upload a video you have permission to use."],
+  ["Can I paste a video link?", "Yes. Paste a public link from YouTube or another supported video website, or upload a video you have permission to use."],
   ["Can I schedule the results?", "Yes. Connect YouTube and an eligible Instagram professional account, choose the clips, and set the publishing interval."],
   ["Do I still control the final clips?", "Always. Preview the selected moments, captions, format, and schedule before publishing or downloading."],
 ] as const;
@@ -116,9 +113,9 @@ function HomeContent({ signedIn }: { signedIn: boolean }) {
           <h1>Paste the link.<br /><span>Skip the busywork.</span></h1>
           <p>DripCut turns one long video into clipped, captioned, scheduled posts. You review the moments. The repetitive part disappears.</p>
           <form className="landing-link-cta" onSubmit={submitLink}>
-            <Youtube size={20} aria-hidden="true" />
-            <label className="dc-visually-hidden" htmlFor="landing-video-url">YouTube video link</label>
-            <input id="landing-video-url" type="url" value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="Paste your YouTube link" />
+            <Link2 size={20} aria-hidden="true" />
+            <label className="dc-visually-hidden" htmlFor="landing-video-url">Public video link</label>
+            <input id="landing-video-url" type="url" value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="Paste any supported video link" />
             <button type="submit">Make my clips <ArrowRight size={17} /></button>
           </form>
           <div className="landing-trust"><span><Check size={13} /> Start free</span><span><Check size={13} /> AI is optional</span><span><Check size={13} /> You approve before publishing</span></div>
@@ -251,13 +248,13 @@ function SchedulePreview({ expanded = false }: { expanded?: boolean }) {
 function PricingContent({ signedIn }: { signedIn: boolean }) {
   const start = () => navigatePath(signedIn ? "/home" : "/signup");
   return <main className="marketing-inner-page">
-    <section className="marketing-page-hero"><span className="landing-pill"><Sparkles size={14} /> Simple credit pricing</span><h1>Pay for the work<br /><span>you no longer have to do.</span></h1><p>Start free, then choose a monthly credit allowance that matches how much video you publish.</p></section>
-    <section className="landing-price-grid">{plans.map((plan) => <article key={plan.name} data-featured={plan.name === "Creator"}>
-      <span>{plan.name === "Creator" ? "Most popular" : plan.detail}</span><h2>{plan.name}</h2><strong>{plan.price}<small>/month</small></strong><p>{plan.detail}</p>
+    <section className="marketing-page-hero"><span className="landing-pill"><Sparkles size={14} /> Free during early access</span><h1>Create and schedule clips.<br /><span>Pay nothing for now.</span></h1><p>Use the complete DripCut workflow while we finish the launch experience. No card, no paid plan, no surprise checkout.</p></section>
+    <section className="landing-price-grid landing-price-grid--free">{plans.map((plan) => <article key={plan.name} data-featured="true">
+      <span>Free for now</span><h2>{plan.name}</h2><strong>{plan.price}<small>/month</small></strong><p>{plan.detail}</p>
       <ul>{plan.features.map((feature) => <li key={feature}><Check size={15} />{feature}</li>)}</ul>
-      <button className={plan.name === "Creator" ? "landing-gradient-button" : "landing-outline-button"} onClick={start}>{plan.name === "Free" ? "Start free" : "Choose plan"}</button>
+      <button className="landing-gradient-button" onClick={start}>{signedIn ? "Open your studio" : "Start free"}</button>
     </article>)}</section>
-    <section className="pricing-explainer"><div><span>1 credit</span><strong>Up to 30 seconds of rendered video</strong></div><div><span>0 credits</span><strong>Scheduling and publishing</strong></div><div><span>Always clear</span><strong>See the estimate before rendering</strong></div></section>
+    <section className="pricing-explainer"><div><span>No card</span><strong>Create an account and start immediately</strong></div><div><span>All core tools</span><strong>Clip, caption, download, and schedule</strong></div><div><span>Before pricing changes</span><strong>We will show the plan clearly in advance</strong></div></section>
     <section className="landing-final landing-final--inner"><span><Zap size={16} /> Start small</span><h2>Try the workflow before choosing a plan.</h2><button className="landing-gradient-button" onClick={start}>Start free <ArrowRight size={17} /></button></section>
   </main>;
 }
@@ -284,12 +281,30 @@ function SectionHeading({ eyebrow, title, body }: { eyebrow: string; title: stri
 function useMarketingMeta(page: MarketingPageKind) {
   useEffect(() => {
     const metadata = {
-      home: ["DripCut — Paste a Video Link. Get Clips Ready to Post.", "Turn a long video into clipped, captioned, scheduled posts with less repetitive editing."],
-      pricing: ["DripCut Pricing — Clip and Schedule Videos", "Compare DripCut credit plans for clipping, captions, and multi-platform scheduling."],
-      about: ["About DripCut — Less Video Busywork", "Learn why DripCut is building a faster path from long videos to scheduled short-form content."],
+      home: {
+        title: "DripCut — Paste a Video Link. Get Clips Ready to Post.",
+        description: "Turn a long video into clipped, captioned, scheduled posts with less repetitive editing.",
+        path: "/",
+      },
+      pricing: {
+        title: "DripCut Pricing — Clip and Schedule Videos",
+        description: "Compare DripCut credit plans for clipping, captions, and multi-platform scheduling.",
+        path: "/pricing",
+      },
+      about: {
+        title: "About DripCut — Less Video Busywork",
+        description: "Learn why DripCut is building a faster path from long videos to scheduled short-form content.",
+        path: "/about",
+      },
     }[page];
-    document.title = metadata[0];
-    document.querySelector<HTMLMetaElement>('meta[name="description"]')?.setAttribute("content", metadata[1]);
-    document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.setAttribute("href", `https://dripcut.onrender.com${page === "home" ? "/" : `/${page}`}`);
+    const canonicalUrl = `https://dripcut.onrender.com${metadata.path}`;
+    document.title = metadata.title;
+    document.querySelector<HTMLMetaElement>('meta[name="description"]')?.setAttribute("content", metadata.description);
+    document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.setAttribute("href", canonicalUrl);
+    document.querySelector<HTMLMetaElement>('meta[property="og:url"]')?.setAttribute("content", canonicalUrl);
+    document.querySelector<HTMLMetaElement>('meta[property="og:title"]')?.setAttribute("content", metadata.title);
+    document.querySelector<HTMLMetaElement>('meta[property="og:description"]')?.setAttribute("content", metadata.description);
+    document.querySelector<HTMLMetaElement>('meta[name="twitter:title"]')?.setAttribute("content", metadata.title);
+    document.querySelector<HTMLMetaElement>('meta[name="twitter:description"]')?.setAttribute("content", metadata.description);
   }, [page]);
 }
