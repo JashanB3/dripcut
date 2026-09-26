@@ -864,6 +864,9 @@
   .feature-actions, .results-header__actions, .page-heading-row { align-items: stretch; flex-direction: column; }
   .feature-actions > *, .results-header__actions > * { justify-content: center; width: 100%; }
   .project-row, .projects-grid, .quick-tool-grid, .thumbnail-grid, .connection-cards, .settings-cards, .usage-grid { grid-template-columns: 1fr; }
+  .template-grid { gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .template-card__detail { padding: 12px; }
+  .template-card__detail button { grid-column: 1 / -1; grid-row: auto; justify-content: center; margin-top: 3px; min-height: 34px; }
   .usage-plan-banner, .usage-upgrade-card { align-items: flex-start; flex-direction: column; }
   .project-row .project-card:last-child { display: block; }
   .source-step { border-radius: 15px; padding: 22px 14px; }
