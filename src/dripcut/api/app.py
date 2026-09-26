@@ -284,7 +284,18 @@ def _frontend_url(path: str = "") -> str:
 
 
 def _social_callback_url(platform: str) -> str:
-    root = os.environ.get("DRIPCUT_PUBLIC_API_URL", "http://127.0.0.1:8000").rstrip("/")
+    # OAuth providers must redirect back to the browser-facing DripCut origin.
+    # On Render, /api/* is proxied from the frontend service to the API service,
+    # which keeps the user's HttpOnly session cookie on the same site. Using the
+    # raw backend host here (dripcut-api.onrender.com) causes providers such as
+    # Meta/Facebook to reject the flow unless that implementation detail is also
+    # whitelisted, and it can lose the app session on callback.
+    root = (
+        os.environ.get("DRIPCUT_OAUTH_CALLBACK_ORIGIN")
+        or os.environ.get("DRIPCUT_FRONTEND_URL")
+        or os.environ.get("DRIPCUT_PUBLIC_API_URL")
+        or "http://127.0.0.1:8000"
+    ).rstrip("/")
     return f"{root}/api/social/{platform}/callback"
 
 

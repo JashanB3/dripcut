@@ -66,6 +66,18 @@ def test_social_callback_without_session_returns_to_login(container) -> None:
     assert response.headers["location"].endswith("/login")
 
 
+def test_social_oauth_callback_prefers_frontend_origin(monkeypatch) -> None:
+    from dripcut.api.app import _social_callback_url
+
+    monkeypatch.setenv("DRIPCUT_FRONTEND_URL", "https://dripcut.onrender.com")
+    monkeypatch.setenv("DRIPCUT_PUBLIC_API_URL", "https://dripcut-api.onrender.com")
+
+    assert (
+        _social_callback_url("instagram")
+        == "https://dripcut.onrender.com/api/social/instagram/callback"
+    )
+
+
 def test_project_card_reconciles_an_interrupted_render(container) -> None:
     service = build_service(container)
     project = container.projects.create("Interrupted render")
