@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -18,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import httpx
 
 from dripcut.core.errors import SocialProviderError, ValidationError
 from dripcut.core.paths import AppPaths
@@ -37,6 +40,8 @@ from dripcut.social.store import LocalSocialStore, SocialStore
 from dripcut.storage.provider import StorageProvider
 from dripcut.tenancy.models import Principal
 from dripcut.utils.fs import ensure_dir, human_size, safe_filename
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "PlatformName",
@@ -189,9 +194,16 @@ class SocialScheduleService:
     ) -> SocialConnection:
         self.state.consume(state, principal, platform)
         provider = self._provider(platform)
-        result = provider.exchange_code(code=code, redirect_uri=redirect_uri)
+        try:
+            result = provider.exchange_code(code=code, redirect_uri=redirect_uri)
+        except (httpx.HTTPError, ValueError, KeyError) as error:
+            raise SocialProviderError("The provider could not complete the connection. Try connecting again.") from error
         encrypted = self.cipher.encrypt(result.credentials.to_dict())
+        previous = self.store.account(
+            principal.workspace_id, platform, access_token=principal.access_token
+        )
         account = SocialAccount(
+            id=previous.id if previous else str(uuid4()),
             workspace_id=principal.workspace_id,
             owner_id=principal.user.id,
             platform=platform,
@@ -350,7 +362,7 @@ class SocialScheduleService:
         require_connected: bool = False,
         principal: Principal | None = None,
     ) -> SocialSchedule:
-        selected = [item for item in platforms if item in {"instagram", "youtube"}]
+        selected = list(dict.fromkeys(item for item in platforms if item in {"instagram", "youtube"}))
         if not selected:
             raise ValidationError("Choose Instagram, YouTube, or both.")
         if interval_minutes < 5:
@@ -361,7 +373,7 @@ class SocialScheduleService:
             raise ValidationError("Choose Publish now or Schedule.")
         start = self._parse_start(start_at, timezone=timezone)
         if publish_mode == "schedule" and require_connected:
-            if privacy != "public":
+            if "youtube" in selected and privacy != "public":
                 raise ValidationError(
                     "YouTube scheduled publishing requires Public visibility.",
                     hint="Choose Public, or use Publish now with Private or Unlisted visibility.",
@@ -383,6 +395,10 @@ class SocialScheduleService:
             for platform in selected
         }
         if require_connected:
+            if self.queue is None or not self.store.supports_background_worker:
+                raise ValidationError("Publishing is unavailable. Ask the administrator to enable the scheduling worker.")
+            if "instagram" in selected and (self.storage is None or self.storage.name == "local"):
+                raise ValidationError("Instagram publishing needs HTTPS media storage. Ask the administrator to configure S3 or R2.")
             disconnected = [platform for platform, account in accounts.items() if account is None]
             if disconnected:
                 raise ValidationError(
@@ -476,10 +492,10 @@ class SocialScheduleService:
         post = next((item for item in schedule.posts if item.id == post_id), None)
         if post is None:
             raise ValidationError("That scheduled post could not be found.")
-        if post.status in {"uploading", "published"}:
+        if post.status not in {"draft", "scheduled", "failed"} or post.external_post_id:
             raise ValidationError("This post has already started publishing.")
         if publish_at is not None:
-            post.publish_at = self._parse_start(publish_at).isoformat(timespec="minutes")
+            post.publish_at = self._parse_start(publish_at, timezone=post.timezone).isoformat(timespec="minutes")
         if caption is not None:
             post.caption = caption.strip()
         account = self.store.account(
@@ -499,7 +515,8 @@ class SocialScheduleService:
     def dispatch_due(self, *, principal: Principal | None = None) -> int:
         if self.queue is None:
             return 0
-        token = principal.access_token if principal else ""
+        # Durable workers must not retain the browser session token, which can expire.
+        token = ""
         due = self.store.due_posts(datetime.now(UTC))
         if principal is not None:
             due = [post for post in due if post.workspace_id == principal.workspace_id]
@@ -553,12 +570,15 @@ class SocialScheduleService:
     def _worker_loop(self) -> None:
         while not self._stop.wait(self.poll_interval):
             try:
+                self.store.recover_interrupted_posts(startup=False)
                 self.dispatch_due()
             except Exception:
-                continue
+                _log.warning("Social scheduler could not dispatch pending posts")
 
     def _enqueue(self, post: ScheduledPost, *, access_token: str = "") -> None:
         if self.queue is None:
+            return
+        if not self.store.claim_post(post, access_token=access_token):
             return
         post.status = "uploading"
         post.error_message = None
@@ -600,20 +620,25 @@ class SocialScheduleService:
                     ),
                     privacy=post.privacy,
                 )
-                if result.credentials and result.credentials != credentials:
-                    account.encrypted_credentials = self.cipher.encrypt(
-                        result.credentials.to_dict()
-                    )
-                    account.updated_at = time.time()
-                    account.scopes = result.credentials.scopes
-                    account.token_expires_at = result.credentials.expires_at
-                    self.store.save_account(account, access_token=access_token)
                 post.status = result.status
                 post.external_post_id = result.external_post_id
                 post.external_url = result.url
                 post.error_message = None
                 post.last_error_code = None
                 self.store.update_post(post, access_token=access_token)
+                # Persist the remote result before optional credential maintenance.
+                # Losing a refresh write must not lose the published post identity.
+                try:
+                    if result.credentials and result.credentials != credentials:
+                        account.encrypted_credentials = self.cipher.encrypt(
+                            result.credentials.to_dict()
+                        )
+                        account.updated_at = time.time()
+                        account.scopes = result.credentials.scopes
+                        account.token_expires_at = result.credentials.expires_at
+                        self.store.save_account(account, access_token=access_token)
+                except Exception:
+                    _log.warning("Could not persist refreshed social credentials for %s", post.platform)
                 job.set_progress(1.0, _status_label(result.status, post.platform))
                 return JobResult(
                     outputs=[],
@@ -658,7 +683,9 @@ class SocialScheduleService:
                 run=publish,
                 project_id=post.project_id,
                 idempotency_key=idempotency_key,
-                max_attempts=3,
+                # A lost response may follow a successful external publish. Replaying
+                # the entire upload can duplicate a post; require explicit recovery.
+                max_attempts=1,
                 retry_backoff_seconds=5,
                 metadata={
                     "schedule_id": post.schedule_id,
@@ -791,7 +818,7 @@ def _safe_publish_error(error: Exception, platform: PlatformName) -> str:
         return f"{label} could not accept this upload. Reconnect {label} and try again."
     if isinstance(error, ValidationError):
         return str(error)[:300]
-    return f"{label} upload failed temporarily. DripCut will retry safely."
+    return f"{label} upload could not be confirmed. Check your account before trying again to avoid a duplicate post."
 
 
 def _status_label(status: str, platform: PlatformName) -> str:

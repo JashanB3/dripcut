@@ -16,7 +16,7 @@ Audit date: 2026-09-20. This file records configuration names and behavior only;
 - [x] Disconnect removes the workspace-scoped credential.
 - [x] Scheduling records are stored in Supabase and selected through workspace RLS.
 - [x] The publisher uses YouTube's resumable-upload endpoint and streams from a file rather than loading the video into memory.
-- [x] The background scheduler recovers interrupted `uploading` records after restart.
+- [x] Interrupted uploads require checking the remote account before retrying; they are not automatically uploaded again.
 
 ## Gaps found in the deployed state
 
@@ -40,3 +40,51 @@ Audit date: 2026-09-20. This file records configuration names and behavior only;
 - A connection is active only when a refresh token and an authenticated channel ID are present.
 - Future public publishing is uploaded as private with an ISO-8601 UTC `status.publishAt`, which lets YouTube own the final publish transition.
 - Private and unlisted QA uploads are accepted immediately without a public `publishAt`.
+
+## Scheduling reliability review — 2026-10-01
+
+The connector code now preserves connection IDs on reconnect, normalizes OAuth
+transport failures, and rejects failed Meta long-lived-token exchanges. Publishing
+uses conditional database claims so concurrent dispatchers cannot start the same
+scheduled post. Due filtering runs before the Supabase batch limit, so future
+Instagram posts cannot starve native YouTube scheduling. Background publishing
+uses worker credentials instead of an expiring browser session.
+
+Already uploaded/published posts cannot be requeued through the edit endpoint.
+Whole-upload automatic retries are disabled because a lost provider response does
+not prove publishing failed. Local interrupted uploads are flagged at restart;
+Supabase uploads older than one hour are flagged for inspection during polling.
+Successful remote IDs are saved before refreshed credential maintenance, and an
+Instagram permalink lookup failure cannot undo a successful publication.
+
+The Schedule page restores the latest schedule after reload, supports selecting
+Instagram alone when YouTube is disconnected, ignores stale project clip responses,
+and labels YouTube privacy separately from Instagram audience visibility.
+
+### Remaining live prerequisites
+
+Only local configuration files were inspected; these are not a live deployment audit.
+`.env` contains YouTube app credentials but no Meta app credentials. `.env.render`
+contains neither provider's app credentials. Both files have worker/encryption/state
+configuration and select S3 storage. No secret values were printed or changed.
+
+Before claiming live publishing works:
+
+1. Configure YouTube client ID/secret and Meta app ID/secret on the deployed server.
+2. Register the exact browser-facing HTTPS callbacks shown above in Google and Meta.
+3. Confirm Google consent access and YouTube Data API enablement. Public uploads from
+   unverified API projects can remain private until Google's API compliance audit:
+   https://developers.google.com/youtube/v3/docs/videos/insert
+4. Confirm Meta permissions/app access and a professional Instagram account linked
+   to a Facebook Page for this Facebook Login adapter.
+5. Verify the existing social database migrations, persistent credential encryption
+   key, service-role worker access, always-running scheduler, and externally fetchable
+   S3/R2 signed HTTPS media URLs.
+6. Complete real consent, token refresh, a private YouTube upload, and a deliberately
+   approved Instagram Reel/future public YouTube schedule. Automated tests use fake
+   provider responses and do not establish these live prerequisites.
+
+Known limits: provider-side reconciliation of an ambiguous upload is manual;
+YouTube's final transition from native scheduled to published is not polled here.
+The JSON social store remains intended for a single application process; use
+Supabase for multiple instances. No deployment or production publishing was done.

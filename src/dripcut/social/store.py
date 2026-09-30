@@ -6,7 +6,7 @@ import json
 import os
 import threading
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -44,7 +44,9 @@ class SocialStore(Protocol):
 
     def due_posts(self, now: datetime) -> list[ScheduledPost]: ...
 
-    def recover_interrupted_posts(self) -> int: ...
+    def claim_post(self, post: ScheduledPost, *, access_token: str = "") -> bool: ...
+
+    def recover_interrupted_posts(self, *, startup: bool = True) -> int: ...
 
     def update_post(self, post: ScheduledPost, *, access_token: str = "") -> None: ...
 
@@ -140,7 +142,21 @@ class LocalSocialStore:
             )
         return due
 
-    def recover_interrupted_posts(self) -> int:
+    def claim_post(self, post: ScheduledPost, *, access_token: str = "") -> bool:
+        del access_token
+        with self._lock:
+            data = self._read()
+            schedule = data["schedules"].get(post.schedule_id, {})
+            for row in schedule.get("posts", []):
+                if row.get("id") == post.id and row.get("status") == "scheduled":
+                    row["status"] = "uploading"
+                    self._write(data)
+                    return True
+        return False
+
+    def recover_interrupted_posts(self, *, startup: bool = True) -> int:
+        if not startup:
+            return 0
         recovered = 0
         with self._lock:
             data = self._read()
@@ -148,8 +164,8 @@ class LocalSocialStore:
                 for post in schedule.get("posts", []):
                     if post.get("status") != "uploading":
                         continue
-                    post["status"] = "scheduled"
-                    post["error_message"] = "Publishing resumed after a worker restart."
+                    post["status"] = "failed"
+                    post["error_message"] = "Publishing was interrupted. Check the platform before retrying to avoid a duplicate post."
                     recovered += 1
             if recovered:
                 self._write(data)
@@ -352,6 +368,7 @@ class SupabaseSocialStore:
                 {
                     "select": "*",
                     "status": "eq.scheduled",
+                    "or": f"(publish_at.lte.{now.isoformat()},and(platform.eq.youtube,metadata->>publish_mode.eq.schedule,metadata->>privacy.eq.public))",
                     "order": "publish_at.asc",
                     "limit": "25",
                 }
@@ -370,15 +387,32 @@ class SupabaseSocialStore:
             or _as_utc(post.publish_at) <= now
         ][:25]
 
-    def recover_interrupted_posts(self) -> int:
+    def claim_post(self, post: ScheduledPost, *, access_token: str = "") -> bool:
+        rows = self._request(
+            "PATCH",
+            "/rest/v1/scheduled_posts?" + urlencode({
+                "id": f"eq.{post.id}", "workspace_id": f"eq.{post.workspace_id}",
+                "status": "eq.scheduled",
+            }),
+            {"status": "uploading", "started_at": datetime.now(UTC).isoformat()},
+            access_token=access_token,
+            prefer="return=representation",
+        )
+        return isinstance(rows, list) and len(rows) == 1
+
+    def recover_interrupted_posts(self, *, startup: bool = True) -> int:
+        del startup
         if not self.service_key:
             return 0
         rows = self._request(
             "PATCH",
-            "/rest/v1/scheduled_posts?status=eq.uploading",
+            "/rest/v1/scheduled_posts?" + urlencode({
+                "status": "eq.uploading",
+                "started_at": f"lt.{(datetime.now(UTC) - timedelta(hours=1)).isoformat()}",
+            }),
             {
-                "status": "scheduled",
-                "error_message": "Publishing resumed after a worker restart.",
+                "status": "failed",
+                "error_message": "Publishing was interrupted. Check the platform before retrying to avoid a duplicate post.",
             },
             access_token=self.service_key,
             prefer="return=representation",

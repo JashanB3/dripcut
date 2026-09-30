@@ -10,7 +10,7 @@ export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtube
   youtubeFailed: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null);
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(() => window.localStorage.getItem("dripcut.pendingVideoUrl") ?? "");
   const [urlState, setUrlState] = useState<"idle" | "invalid">("idle");
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
 
@@ -18,7 +18,10 @@ export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtube
     try {
       const parsed = new URL(url.trim());
       const validLink = ["http:", "https:"].includes(parsed.protocol) && Boolean(parsed.hostname);
-      if (validLink && rightsConfirmed) onYouTube(url.trim(), true);
+       if (validLink && rightsConfirmed) {
+         window.localStorage.removeItem("dripcut.pendingVideoUrl");
+         onYouTube(url.trim(), true);
+       }
       else setUrlState("invalid");
     } catch {
       setUrlState("invalid");
@@ -52,7 +55,7 @@ export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtube
               disabled={busy !== null}
               onKeyDown={(event) => event.key === "Enter" && submitUrl()}
               placeholder="https://video-site.com/watch/..."
-              aria-label="Public video URL"
+               aria-label="YouTube video URL or supported public link"
             />
           </label>
           {urlState === "invalid" && <small className="source-error">Enter a valid public video URL and confirm your permission.</small>}
@@ -81,7 +84,7 @@ export function SourcePicker({ onFile, onYouTube, busy, progress, stage, youtube
             <small>Retry the public link, or upload a copy you are allowed to use. Your selected template and clip settings stay in place.</small>
           </span>
           <button disabled={busy !== null || !url.trim() || !rightsConfirmed} onClick={submitUrl}>
-            <RotateCcw size={15} /> Retry link
+             <RotateCcw size={15} /> Retry link
           </button>
           <button className="youtube-recovery__upload" disabled={busy !== null} onClick={() => input.current?.click()}>
             <Upload size={15} /> Upload video instead

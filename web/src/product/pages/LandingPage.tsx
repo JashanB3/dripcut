@@ -102,6 +102,8 @@ function HomeContent({ signedIn }: { signedIn: boolean }) {
   const start = () => navigatePath(signedIn ? "/home" : "/signup");
   const submitLink = (event: FormEvent) => {
     event.preventDefault();
+    const trimmed = videoUrl.trim();
+    if (trimmed) window.localStorage.setItem("dripcut.pendingVideoUrl", trimmed);
     start();
   };
 

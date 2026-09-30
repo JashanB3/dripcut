@@ -410,7 +410,9 @@ class InstagramProvider:
                 "fb_exchange_token": short_token,
             },
         )
-        token_payload = long_lived.json() if not long_lived.is_error else response.json()
+        if long_lived.is_error:
+            raise _provider_error("Meta", long_lived)
+        token_payload = long_lived.json()
         user_token = str(token_payload["access_token"])
         pages = self.client.get(
             f"{self.graph_root}/me/accounts",
@@ -494,11 +496,18 @@ class InstagramProvider:
         media_id = str(publish.json().get("id") or "")
         if not media_id:
             raise SocialProviderError("Instagram did not return a published media id.")
-        permalink = self.client.get(
-            f"{self.graph_root}/{media_id}",
-            params={"fields": "permalink", "access_token": credentials.access_token},
-        )
-        url = None if permalink.is_error else str(permalink.json().get("permalink") or "") or None
+        # Publishing has succeeded; an optional permalink lookup must not turn
+        # this into a failed job that the user could publish again.
+        url = None
+        try:
+            permalink = self.client.get(
+                f"{self.graph_root}/{media_id}",
+                params={"fields": "permalink", "access_token": credentials.access_token},
+            )
+            if not permalink.is_error:
+                url = str(permalink.json().get("permalink") or "") or None
+        except (httpx.HTTPError, ValueError):
+            pass
         return PublishResult(external_post_id=media_id, url=url, status="published")
 
     def revoke(self, credentials: SocialCredentials) -> None:

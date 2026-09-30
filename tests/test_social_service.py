@@ -487,7 +487,8 @@ def test_social_store_recovers_posts_interrupted_during_upload(paths) -> None:
     assert store.recover_interrupted_posts() == 1
     recovered = store.schedule("local", schedule.id)
     assert recovered is not None
-    assert recovered.posts[0].status == "scheduled"
+    assert recovered.posts[0].status == "failed"
+    assert "Check the platform" in recovered.posts[0].error_message
 
 
 def test_future_instagram_posts_wait_while_youtube_uses_native_scheduling(paths) -> None:
@@ -619,3 +620,141 @@ def test_supabase_secret_api_key_does_not_replace_caller_identity(monkeypatch, c
     else:
         assert request.get_header("Apikey") == service_key
         assert request.get_header("Authorization") is None
+
+
+def _queued_schedule(store, *, status="scheduled"):
+    post = ScheduledPost(platform="youtube", clip_name="clip.mp4", publish_at="2030-01-01T10:00:00Z", caption="Caption", status=status, schedule_id="schedule-claim", privacy="public")
+    schedule = SocialSchedule(id=post.schedule_id, project_id="project", archive="clip.mp4", archive_name="clip.mp4", created_at=1, posts=[post])
+    store.save_schedule(schedule)
+    return schedule
+
+
+def test_concurrent_dispatch_claims_post_once(paths):
+    from concurrent.futures import ThreadPoolExecutor
+
+    store = LocalSocialStore(paths.projects / "claim")
+    post = _queued_schedule(store).posts[0]
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        claims = list(workers.map(lambda _: store.claim_post(post), range(20)))
+    assert sum(claims) == 1
+
+
+@pytest.mark.parametrize("status", ["uploaded", "scheduled_on_youtube", "youtube_processing", "published", "uploading", "cancelled"])
+def test_external_or_active_posts_cannot_be_requeued(paths, status):
+    service = SocialScheduleService(paths)
+    schedule = _queued_schedule(service.store, status=status)
+    with pytest.raises(ValidationError, match="already started"):
+        service.update_scheduled_post(schedule.id, schedule.posts[0].id, publish_at=None, caption="Changed")
+
+
+def test_supabase_due_filter_runs_before_limit(monkeypatch):
+    store = SupabaseSocialStore("https://example.test", "anon", "service")
+    requests = []
+    monkeypatch.setattr(store, "_request", lambda method, path, **kwargs: requests.append(path) or [])
+    store.due_posts(datetime.now(UTC))
+    query = parse_qs(urlparse(requests[0]).query)
+    assert "publish_at.lte." in query["or"][0]
+    assert "platform.eq.youtube" in query["or"][0]
+    assert "metadata->>privacy.eq.public" in query["or"][0]
+    assert query["limit"] == ["25"]
+
+
+def test_supabase_claim_is_conditional(monkeypatch):
+    store = SupabaseSocialStore("https://example.test", "anon", "service")
+    requests = []
+    monkeypatch.setattr(store, "_request", lambda method, path, payload, **kwargs: requests.append((method, path, payload)) or [])
+    post = ScheduledPost(platform="youtube", clip_name="clip.mp4", publish_at="2030-01-01T10:00:00Z", caption="")
+    assert not store.claim_post(post)
+    assert parse_qs(urlparse(requests[0][1]).query)["status"] == ["eq.scheduled"]
+    assert requests[0][2]["status"] == "uploading"
+
+
+def test_instagram_permalink_timeout_does_not_lose_success(tmp_path):
+    from dripcut.social.providers import InstagramProvider
+
+    def handler(request):
+        if request.url.path.endswith("/media"):
+            return httpx.Response(200, json={"id": "container"})
+        if request.url.path.endswith("/container"):
+            return httpx.Response(200, json={"status_code": "FINISHED"})
+        if request.url.path.endswith("/media_publish"):
+            return httpx.Response(200, json={"id": "published-reel"})
+        raise httpx.ReadTimeout("permalink unavailable")
+
+    provider = InstagramProvider("app", "secret", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    result = provider.publish(SocialCredentials(access_token="token", extra={"instagram_user_id": "ig"}), video_path=tmp_path / "clip.mp4", media_url="https://media.example/clip.mp4", title="Clip", caption="Reel")
+    assert result.status == "published"
+    assert result.external_post_id == "published-reel"
+    assert result.url is None
+
+
+def test_instagram_rejects_failed_long_lived_exchange():
+    from dripcut.social.providers import InstagramProvider
+
+    def handler(request):
+        if "fb_exchange_token" in request.url.params:
+            return httpx.Response(400, json={"error": {"message": "Token exchange denied"}})
+        return httpx.Response(200, json={"access_token": "short"})
+
+    provider = InstagramProvider("app", "secret", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(SocialProviderError):
+        provider.exchange_code(code="code", redirect_uri="https://example.test/callback")
+
+
+def test_oauth_reconnect_preserves_connection_identity(paths):
+    class Provider:
+        platform = "youtube"
+        label = "YouTube"
+        configured = True
+
+        def exchange_code(self, **kwargs):
+            return OAuthResult(external_account_id="channel", display_name="Creator", credentials=SocialCredentials(access_token="access", refresh_token="refresh"))
+
+    service = SocialScheduleService(paths, providers={"youtube": Provider()})
+    principal = Principal(user=AuthUser(id="user", email="creator@example.test", name="Creator"), workspace_id="workspace", role="owner", access_token="session")
+    ids = []
+    for _ in range(2):
+        state = service.state.issue(principal, "youtube")
+        service.complete_oauth("youtube", principal, code="code", state=state, redirect_uri="https://example.test/callback")
+        ids.append(service.store.account("workspace", "youtube").id)
+    assert ids[0] == ids[1]
+
+
+def test_oauth_transport_failure_is_customer_safe(paths):
+    class Provider:
+        def exchange_code(self, **kwargs):
+            raise httpx.ReadTimeout("internal transport diagnostic")
+
+    service = SocialScheduleService(paths, providers={"youtube": Provider()})
+    principal = Principal(user=AuthUser(id="user", email="creator@example.test", name="Creator"), workspace_id="workspace", role="owner", access_token="session")
+    with pytest.raises(SocialProviderError, match="Try connecting again"):
+        service.complete_oauth("youtube", principal, code="code", state=service.state.issue(principal, "youtube"), redirect_uri="https://example.test/callback")
+
+
+def test_ambiguous_upload_is_not_automatically_repeated(paths):
+    from dripcut.social.models import SocialAccount
+
+    calls = []
+
+    class Provider:
+        def publish(self, *args, **kwargs):
+            calls.append(1)
+            raise httpx.ReadTimeout("Response lost after upload")
+
+    queue = LocalJobQueue(EventBus(), history_file=paths.history_file)
+    service = SocialScheduleService(paths, queue=queue, providers={"youtube": Provider()})
+    service.store.save_account(SocialAccount(workspace_id="local", owner_id="local", platform="youtube", external_account_id="channel", display_name="Creator", encrypted_credentials=service.cipher.encrypt(SocialCredentials(access_token="access").to_dict())))
+    clip = paths.temp / "uncertain.mp4"
+    clip.parent.mkdir(parents=True, exist_ok=True)
+    clip.write_bytes(b"video")
+    try:
+        schedule = service.create_schedule_for_clips(clip_assets=[("clip", clip.name, str(clip))], project_id="project", platforms=["youtube"], interval_minutes=30, start_at="now", caption="Caption", publish_mode="now")
+        assert queue.wait(timeout=5)
+        assert calls == [1]
+        post = service.get_schedule(schedule.id).posts[0]
+        assert post.status == "failed"
+        assert "Check your account" in post.error_message
+        service.dispatch_due()
+        assert calls == [1]
+    finally:
+        queue.shutdown()

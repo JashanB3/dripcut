@@ -4,12 +4,15 @@ import { useEffect, useState } from "react";
 import { beginSocialOAuth, disconnectSocial, fetchSocialConnections } from "../api/client";
 import { CustomerError } from "../components/CustomerError";
 import type { SocialConnection } from "../models";
+import "./social.css";
 
 export function SettingsPage() {
   const [connections, setConnections] = useState<SocialConnection[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const socialResult = new URLSearchParams(window.location.search).get("social");
+  const params = new URLSearchParams(window.location.search);
+  const socialResult = params.get("social");
+  const socialError = params.get("social_error");
 
   const refresh = async () => {
     const connections = await fetchSocialConnections();
@@ -27,6 +30,7 @@ export function SettingsPage() {
       if (connection.connected) {
         await disconnectSocial(platform);
         await refresh();
+        setBusy(false);
       } else {
         window.location.assign(await beginSocialOAuth(platform));
       }
@@ -41,15 +45,16 @@ export function SettingsPage() {
     {error !== null && <CustomerError error={error} fallback="The social connection could not be updated." />}
     {socialResult === "youtube-connected" && <div className="social-notice"><CheckCircle2 size={16} /> YouTube connected successfully.</div>}
     {socialResult === "youtube-denied" && <div className="social-notice">YouTube connection was cancelled. Nothing changed.</div>}
-    {socialResult === "youtube-failed" && <CustomerError error={null} fallback="YouTube could not be connected. Check that this Google account owns a YouTube channel, then try again." />}
+    {(socialResult === "youtube-failed" || socialError === "youtube") && <CustomerError error={null} fallback="YouTube could not be connected. Check that this Google account owns a YouTube channel, then try again." />}
     {socialResult === "instagram-connected" && <div className="social-notice"><CheckCircle2 size={16} /> Instagram connected successfully.</div>}
     {socialResult === "instagram-denied" && <div className="social-notice">Instagram connection was cancelled. Nothing changed.</div>}
-    {socialResult === "instagram-failed" && <CustomerError error={null} fallback="Instagram could not be connected. Use a Creator or Business account linked to a Facebook Page, then try again." />}
+    {(socialResult === "instagram-failed" || socialError === "instagram") && <CustomerError error={null} fallback="Instagram could not be connected. Use a Creator or Business account linked to a Facebook Page, then try again." />}
     <section className="connection-cards">
-      {connections.map((connection) => <article key={connection.platform} data-connected={connection.connected}>
+      {!connections.length && !error && <div className="social-loading" role="status">Loading publishing accounts…</div>}
+      {connections.map((connection) => <article className="social-connection-card" key={connection.platform} data-connected={connection.connected}>
         {connection.avatarUrl ? <img className="social-avatar" src={connection.avatarUrl} alt="" /> : connection.platform === "youtube" ? <Youtube size={22} /> : <Instagram size={22} />}
-        <div><strong>{connection.platform === "youtube" ? "YouTube Shorts" : "Instagram Reels"}</strong><span>{connection.connected ? connection.detail : connection.platform === "youtube" ? "Connect your channel to schedule and publish finished clips." : "Connect your Instagram Creator or Business account to publish Reels."}</span>{connection.channelId && <small>Account ID: {connection.channelId}</small>}<small>{connection.connected ? "Connected credentials are encrypted and persist across restarts." : connection.configured ? "Official OAuth is ready. You will choose the linked account in the provider window." : connection.setupHint}</small></div>
-        <button disabled={!connection.configured || busy} onClick={() => void changeConnection(connection.platform)}>{busy ? "Working…" : connection.connected ? "Disconnect" : connection.configured ? `Connect ${connection.platform === "youtube" ? "YouTube" : "Instagram"}` : "Admin setup required"}</button>
+         <div><strong>{connection.platform === "youtube" ? "YouTube Shorts" : "Instagram Reels"}</strong><span>{connection.connected ? connection.detail : connection.platform === "youtube" ? "Connect a channel to schedule and publish finished clips." : "Connect an eligible Instagram professional account to publish Reels."}</span>{connection.channelId && <small>Account ID: {connection.channelId}</small>}<small>{connection.connected ? "Ready to publish. Credentials are encrypted and persist across restarts." : connection.configured ? "OAuth is ready. You will choose the account in the provider window." : connection.setupHint}</small></div>
+         <button aria-label={`${connection.connected ? "Disconnect" : "Connect"} ${connection.label}`} disabled={!connection.configured || busy} onClick={() => void changeConnection(connection.platform)}>{busy ? "Working…" : connection.connected ? "Disconnect" : connection.configured ? `Connect ${connection.platform === "youtube" ? "YouTube" : "Instagram"}` : "Admin setup required"}</button>
       </article>)}
     </section>
     <p className="settings-social-help"><Instagram size={16} /> Instagram requires a Creator or Business account connected to a Facebook Page. After connecting it here, select Instagram Reels in Schedule and it will publish in the same time slot as YouTube when both are selected.</p>

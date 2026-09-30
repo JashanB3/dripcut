@@ -54,8 +54,8 @@ test.describe("creator clipping journey", () => {
     ]));
 
     await page.goto("/schedule");
-    await expect(page.getByRole("heading", { name: /What will you/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Schedule", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: /Schedule your finished clips/ })).toBeVisible();
+    await expect(page.getByRole("main").getByRole("button", { name: "Schedule", exact: true })).toBeVisible();
 
     await page.goto("/logout");
     await expect(page).toHaveURL(/\/login$/);
@@ -66,7 +66,7 @@ test.describe("creator clipping journey", () => {
     await expect(page.getByRole("heading", { name: "Continue creating" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Open sample" })).toBeVisible();
 
-    await page.route("**/api/jobs/youtube", async (route) => {
+    await page.route("**/api/jobs/link", async (route) => {
       await route.fulfill({
         status: 202,
         contentType: "application/json",
@@ -79,7 +79,7 @@ test.describe("creator clipping journey", () => {
           percent: 0,
           stage: "Failed",
           elapsed: 1,
-          error: "YouTube asked the processing server for additional verification.",
+          error: "The video source asked the processing server for additional verification.",
           error_code: "BOT_CHALLENGE",
           hint: "Retry once, or upload a copy you are allowed to use and continue.",
           retryable: true,
@@ -92,7 +92,7 @@ test.describe("creator clipping journey", () => {
     await page.getByLabel("I own this video or have permission to edit and republish it.").check();
     await page.getByRole("button", { name: "Import video" }).click();
     await expect(page.getByText("Keep going with this project")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Retry YouTube" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Retry link/ })).toBeVisible();
     await expect(page.getByRole("button", { name: "Upload video instead" })).toBeVisible();
   });
 });
