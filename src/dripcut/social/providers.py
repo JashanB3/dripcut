@@ -318,16 +318,11 @@ class YouTubeProvider:
 
 
 class InstagramProvider:
-    """Meta OAuth and Instagram Graph API Reels publishing."""
+    """Instagram Login and Instagram Graph API Reels publishing."""
 
     platform: PlatformName = "instagram"
     label = "Instagram Reels"
-    scopes = (
-        "pages_show_list",
-        "pages_read_engagement",
-        "instagram_basic",
-        "instagram_content_publish",
-    )
+    scopes = ("instagram_business_basic", "instagram_business_content_publish")
 
     def __init__(
         self,
@@ -345,8 +340,8 @@ class InstagramProvider:
     @classmethod
     def from_environment(cls) -> InstagramProvider:
         return cls(
-            os.environ.get("DRIPCUT_META_APP_ID", ""),
-            os.environ.get("DRIPCUT_META_APP_SECRET", ""),
+            os.environ.get("DRIPCUT_INSTAGRAM_APP_ID", ""),
+            os.environ.get("DRIPCUT_INSTAGRAM_APP_SECRET", ""),
             graph_version=os.environ.get("DRIPCUT_META_GRAPH_VERSION", "v23.0"),
         )
 
@@ -372,7 +367,7 @@ class InstagramProvider:
 
     @property
     def graph_root(self) -> str:
-        return f"https://graph.facebook.com/{self.graph_version}"
+        return f"https://graph.instagram.com/{self.graph_version}"
 
     def authorization_url(self, *, state: str, redirect_uri: str) -> str:
         self._require_configured()
@@ -383,72 +378,95 @@ class InstagramProvider:
                 "state": state,
                 "response_type": "code",
                 "scope": ",".join(self.scopes),
+                "enable_fb_login": "false",
+                "force_reauth": "true",
             }
         )
-        return f"https://www.facebook.com/{self.graph_version}/dialog/oauth?{query}"
+        return f"https://www.instagram.com/oauth/authorize?{query}"
 
     def exchange_code(self, *, code: str, redirect_uri: str) -> OAuthResult:
         self._require_configured()
-        response = self.client.get(
-            f"{self.graph_root}/oauth/access_token",
-            params={
+        response = self.client.post(
+            "https://api.instagram.com/oauth/access_token",
+            data={
                 "client_id": self.app_id,
                 "client_secret": self.app_secret,
+                "grant_type": "authorization_code",
                 "redirect_uri": redirect_uri,
                 "code": code,
             },
         )
         if response.is_error:
-            raise _provider_error("Meta", response)
-        short_token = str(response.json()["access_token"])
+            raise _provider_error("Instagram", response)
+        payload = response.json()
+        if "data" in payload:
+            rows = payload["data"]
+            if not isinstance(rows, list) or len(rows) != 1 or "access_token" in payload:
+                raise SocialProviderError("Instagram returned an ambiguous account. Connect again.")
+            payload = rows[0]
+        short_token = str(payload.get("access_token") or "")
+        user_id = str(payload.get("user_id") or "")
+        if not short_token or not user_id:
+            raise SocialProviderError("Instagram did not return an account token. Connect again.")
+        granted = payload.get("permissions")
+        if granted is not None:
+            permissions = set(granted.replace(",", " ").split()) if isinstance(granted, str) else set(granted)
+            if not set(self.scopes).issubset(permissions):
+                raise SocialProviderError("Allow profile and publishing access to schedule Instagram Reels.")
         long_lived = self.client.get(
-            f"{self.graph_root}/oauth/access_token",
+            "https://graph.instagram.com/access_token",
             params={
-                "grant_type": "fb_exchange_token",
-                "client_id": self.app_id,
+                "grant_type": "ig_exchange_token",
                 "client_secret": self.app_secret,
-                "fb_exchange_token": short_token,
+                "access_token": short_token,
             },
         )
         if long_lived.is_error:
-            raise _provider_error("Meta", long_lived)
+            raise _provider_error("Instagram", long_lived)
         token_payload = long_lived.json()
-        user_token = str(token_payload["access_token"])
-        pages = self.client.get(
-            f"{self.graph_root}/me/accounts",
-            params={
-                "fields": "id,name,access_token,instagram_business_account{id,username,profile_picture_url}",
-                "access_token": user_token,
-            },
+        token = str(token_payload["access_token"])
+        profile = self.client.get(
+            f"{self.graph_root}/me",
+            params={"fields": "user_id,username", "access_token": token},
         )
-        if pages.is_error:
-            raise _provider_error("Meta", pages)
-        eligible = [
-            page
-            for page in pages.json().get("data", [])
-            if page.get("instagram_business_account", {}).get("id")
-        ]
-        if not eligible:
-            raise SocialProviderError(
-                "No eligible Instagram professional account was found.",
-                hint="Connect a Creator or Business Instagram account to a Facebook Page.",
-            )
-        page = eligible[0]
-        instagram = page["instagram_business_account"]
+        if profile.is_error:
+            raise _provider_error("Instagram", profile)
+        instagram = profile.json()
+        if str(instagram.get("user_id") or "") != user_id:
+            raise SocialProviderError("Instagram could not verify the connected account. Connect again.")
         credentials = SocialCredentials(
-            access_token=str(page.get("access_token") or user_token),
-            expires_at=time.time() + float(token_payload.get("expires_in") or 5_184_000),
+            access_token=token,
+            expires_at=time.time() + float(token_payload["expires_in"]),
             scopes=self.scopes,
-            extra={
-                "instagram_user_id": str(instagram["id"]),
-                "page_id": str(page["id"]),
-                "avatar_url": str(instagram.get("profile_picture_url") or ""),
-            },
+            extra={"instagram_user_id": user_id, "login_method": "instagram"},
         )
         return OAuthResult(
-            external_account_id=str(instagram["id"]),
-            display_name=str(instagram.get("username") or page.get("name") or "Instagram"),
+            external_account_id=user_id,
+            display_name=str(instagram.get("username") or "Instagram"),
             credentials=credentials,
+        )
+
+    def _refresh(self, credentials: SocialCredentials) -> SocialCredentials:
+        # Existing Facebook Page tokens retain their original API and lifecycle.
+        if credentials.extra.get("login_method") != "instagram":
+            return credentials
+        expiry = credentials.expires_at
+        if expiry is None or expiry <= time.time():
+            raise SocialProviderError("The Instagram connection expired. Reconnect Instagram.")
+        if expiry > time.time() + 7 * 86400:
+            return credentials
+        response = self.client.get(
+            "https://graph.instagram.com/refresh_access_token",
+            params={"grant_type": "ig_refresh_token", "access_token": credentials.access_token},
+        )
+        if response.is_error:
+            raise _provider_error("Instagram", response)
+        payload = response.json()
+        return SocialCredentials(
+            access_token=str(payload["access_token"]),
+            expires_at=time.time() + float(payload["expires_in"]),
+            scopes=credentials.scopes,
+            extra=credentials.extra,
         )
 
     def publish(
@@ -468,11 +486,17 @@ class InstagramProvider:
                 "Instagram needs a temporary HTTPS media URL.",
                 hint="Use S3 or R2 object storage when automatic Instagram publishing is enabled.",
             )
+        credentials = self._refresh(credentials)
+        graph_root = (
+            f"https://graph.facebook.com/{self.graph_version}"
+            if credentials.extra.get("page_id") and credentials.extra.get("login_method") != "instagram"
+            else self.graph_root
+        )
         instagram_id = credentials.extra.get("instagram_user_id")
         if not instagram_id:
             raise SocialProviderError("The Instagram account id is missing. Reconnect Instagram.")
         create = self.client.post(
-            f"{self.graph_root}/{instagram_id}/media",
+            f"{graph_root}/{instagram_id}/media",
             data={
                 "media_type": "REELS",
                 "video_url": media_url,
@@ -486,9 +510,9 @@ class InstagramProvider:
         creation_id = str(create.json().get("id") or "")
         if not creation_id:
             raise SocialProviderError("Instagram did not return a media container id.")
-        self._wait_for_container(creation_id, credentials.access_token)
+        self._wait_for_container(creation_id, credentials.access_token, graph_root=graph_root)
         publish = self.client.post(
-            f"{self.graph_root}/{instagram_id}/media_publish",
+            f"{graph_root}/{instagram_id}/media_publish",
             data={"creation_id": creation_id, "access_token": credentials.access_token},
         )
         if publish.is_error:
@@ -501,23 +525,23 @@ class InstagramProvider:
         url = None
         try:
             permalink = self.client.get(
-                f"{self.graph_root}/{media_id}",
+                f"{graph_root}/{media_id}",
                 params={"fields": "permalink", "access_token": credentials.access_token},
             )
             if not permalink.is_error:
                 url = str(permalink.json().get("permalink") or "") or None
         except (httpx.HTTPError, ValueError):
             pass
-        return PublishResult(external_post_id=media_id, url=url, status="published")
+        return PublishResult(external_post_id=media_id, url=url, status="published", credentials=credentials)
 
     def revoke(self, credentials: SocialCredentials) -> None:
         del credentials
 
-    def _wait_for_container(self, creation_id: str, token: str) -> None:
+    def _wait_for_container(self, creation_id: str, token: str, *, graph_root: str | None = None) -> None:
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             response = self.client.get(
-                f"{self.graph_root}/{creation_id}",
+                f"{graph_root or self.graph_root}/{creation_id}",
                 params={"fields": "status_code,status", "access_token": token},
             )
             if response.is_error:
@@ -537,7 +561,7 @@ class InstagramProvider:
         if not self.configured:
             raise SocialProviderError(
                 "Instagram OAuth is not configured.",
-                hint="Set DRIPCUT_META_APP_ID and DRIPCUT_META_APP_SECRET.",
+                hint="Set DRIPCUT_INSTAGRAM_APP_ID and DRIPCUT_INSTAGRAM_APP_SECRET from Instagram API setup with Instagram Login.",
             )
 
 

@@ -767,7 +767,7 @@ class SocialScheduleService:
             "youtube": (
                 "Set DRIPCUT_YOUTUBE_CLIENT_ID and DRIPCUT_YOUTUBE_CLIENT_SECRET."
             ),
-            "instagram": "Set DRIPCUT_META_APP_ID and DRIPCUT_META_APP_SECRET.",
+            "instagram": "Set DRIPCUT_INSTAGRAM_APP_ID and DRIPCUT_INSTAGRAM_APP_SECRET for direct Instagram Login.",
         }
         return SocialConnection(
             platform=provider.platform,

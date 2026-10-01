@@ -692,9 +692,9 @@ def test_instagram_rejects_failed_long_lived_exchange():
     from dripcut.social.providers import InstagramProvider
 
     def handler(request):
-        if "fb_exchange_token" in request.url.params:
+        if request.url.params.get("grant_type") == "ig_exchange_token":
             return httpx.Response(400, json={"error": {"message": "Token exchange denied"}})
-        return httpx.Response(200, json={"access_token": "short"})
+        return httpx.Response(200, json={"access_token": "short", "user_id": "ig"})
 
     provider = InstagramProvider("app", "secret", client=httpx.Client(transport=httpx.MockTransport(handler)))
     with pytest.raises(SocialProviderError):
@@ -758,3 +758,94 @@ def test_ambiguous_upload_is_not_automatically_repeated(paths):
         assert calls == [1]
     finally:
         queue.shutdown()
+
+
+def test_instagram_authorizes_directly_without_facebook():
+    from dripcut.social.providers import InstagramProvider
+
+    provider = InstagramProvider("instagram-app", "instagram-secret")
+    url = urlparse(provider.authorization_url(state="state", redirect_uri="https://dripcut.example/api/social/instagram/callback"))
+    assert url.netloc == "www.instagram.com"
+    assert url.path == "/oauth/authorize"
+    query = parse_qs(url.query)
+    assert query["enable_fb_login"] == ["false"]
+    assert query["force_reauth"] == ["true"]
+    assert query["state"] == ["state"]
+    assert set(query["scope"][0].split(",")) == {"instagram_business_basic", "instagram_business_content_publish"}
+
+
+def test_instagram_does_not_use_parent_facebook_app_credentials(monkeypatch):
+    from dripcut.social.providers import InstagramProvider
+
+    monkeypatch.delenv("DRIPCUT_INSTAGRAM_APP_ID", raising=False)
+    monkeypatch.delenv("DRIPCUT_INSTAGRAM_APP_SECRET", raising=False)
+    monkeypatch.setenv("DRIPCUT_META_APP_ID", "facebook-app")
+    monkeypatch.setenv("DRIPCUT_META_APP_SECRET", "facebook-secret")
+    assert not InstagramProvider.from_environment().configured
+    monkeypatch.setenv("DRIPCUT_INSTAGRAM_APP_ID", "instagram-app")
+    monkeypatch.setenv("DRIPCUT_INSTAGRAM_APP_SECRET", "instagram-secret")
+    assert InstagramProvider.from_environment().configured
+
+
+@pytest.mark.parametrize("wrapped", [True, False])
+def test_instagram_direct_token_exchange(wrapped):
+    from dripcut.social.providers import InstagramProvider
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert "facebook.com" not in request.url.host
+        if request.url.host == "api.instagram.com":
+            assert request.method == "POST"
+            assert parse_qs(request.content.decode())["grant_type"] == ["authorization_code"]
+            token = {"access_token": "short", "user_id": "ig-1", "permissions": ",".join(InstagramProvider.scopes)}
+            return httpx.Response(200, json={"data": [token]} if wrapped else token)
+        if request.url.path == "/access_token":
+            assert request.url.params["grant_type"] == "ig_exchange_token"
+            return httpx.Response(200, json={"access_token": "long", "expires_in": 5184000})
+        assert request.url.path.endswith("/me")
+        return httpx.Response(200, json={"user_id": "ig-1", "username": "creator"})
+
+    provider = InstagramProvider("ig-app", "ig-secret", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    result = provider.exchange_code(code="code", redirect_uri="https://example.test/callback")
+    assert result.external_account_id == "ig-1"
+    assert result.credentials.access_token == "long"
+    assert result.credentials.extra["login_method"] == "instagram"
+    assert result.display_name == "creator"
+    assert len(calls) == 3
+
+
+def test_instagram_refreshes_direct_token_before_expiry():
+    from dripcut.social.providers import InstagramProvider
+
+    def handler(request):
+        assert str(request.url).startswith("https://graph.instagram.com/refresh_access_token")
+        assert request.url.params["grant_type"] == "ig_refresh_token"
+        return httpx.Response(200, json={"access_token": "refreshed", "expires_in": 5184000})
+
+    provider = InstagramProvider("app", "secret", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    credentials = SocialCredentials(access_token="old", expires_at=datetime.now(UTC).timestamp() + 86400, extra={"login_method": "instagram", "instagram_user_id": "ig-1"})
+    assert provider._refresh(credentials).access_token == "refreshed"
+    with pytest.raises(SocialProviderError, match="expired"):
+        provider._refresh(SocialCredentials(access_token="expired", expires_at=1, extra={"login_method": "instagram"}))
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_instagram_publish_uses_token_specific_host(tmp_path, legacy):
+    from dripcut.social.providers import InstagramProvider
+
+    def handler(request):
+        assert request.url.host == ("graph.facebook.com" if legacy else "graph.instagram.com")
+        if request.url.path.endswith("/media"):
+            return httpx.Response(200, json={"id": "container"})
+        if request.url.path.endswith("/container"):
+            return httpx.Response(200, json={"status_code": "FINISHED"})
+        if request.url.path.endswith("/media_publish"):
+            return httpx.Response(200, json={"id": "reel"})
+        return httpx.Response(200, json={"permalink": "https://www.instagram.com/reel/test"})
+
+    provider = InstagramProvider("app", "secret", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    extra = {"instagram_user_id": "ig-1", **({"page_id": "page"} if legacy else {"login_method": "instagram"})}
+    result = provider.publish(SocialCredentials(access_token="token", expires_at=datetime.now(UTC).timestamp() + 5184000, extra=extra), video_path=tmp_path / "clip.mp4", media_url="https://example.test/clip.mp4", title="Clip", caption="Reel")
+    assert result.status == "published"

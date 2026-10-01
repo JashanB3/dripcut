@@ -154,7 +154,7 @@ export function SchedulePage() {
       {connections.map((item) => <article className="social-connection-card" key={item.platform} data-connected={item.connected}>
         {item.avatarUrl ? <img className="social-avatar" src={item.avatarUrl} alt="" /> : item.platform === "youtube" ? <Youtube /> : <Instagram />}
         <div><strong>{item.platform === "youtube" ? "YouTube Shorts" : "Instagram Reels"}</strong><span>{item.connected ? item.detail : `Connect ${item.platform === "youtube" ? "a YouTube channel" : "an Instagram professional account"}.`}</span>{item.channelId && <small>Account ID: {item.channelId}</small>}<small>{item.connected ? "Access is encrypted and stored on the server." : item.configured ? "OAuth is ready." : item.setupHint}</small></div>
-        <button disabled={!item.configured || connectionBusy} onClick={() => void changeConnection(item.platform)}>{connectionBusy ? "Working…" : item.connected ? "Disconnect" : item.configured ? `Connect ${item.platform === "youtube" ? "YouTube" : "Instagram"}` : "Admin setup required"}</button>
+        <button disabled={(!item.configured && !item.connected) || connectionBusy} onClick={() => void changeConnection(item.platform)}>{connectionBusy ? "Working…" : item.connected ? "Disconnect" : item.configured ? `Connect ${item.platform === "youtube" ? "YouTube" : "Instagram"}` : "Admin setup required"}</button>
       </article>)}
     </div>
     <div className="schedule-workspace">

@@ -88,3 +88,32 @@ Known limits: provider-side reconciliation of an ambiguous upload is manual;
 YouTube's final transition from native scheduled to published is not polled here.
 The JSON social store remains intended for a single application process; use
 Supabase for multiple instances. No deployment or production publishing was done.
+
+## Direct Instagram Login — 2026-10-01
+
+New connections now authorize at `https://www.instagram.com/oauth/authorize`
+with `enable_fb_login=false`, `force_reauth=true`, and only
+`instagram_business_basic` / `instagram_business_content_publish` permissions.
+The server exchanges codes at `api.instagram.com`, obtains long-lived tokens,
+loads the professional account through `graph.instagram.com`, and refreshes valid
+near-expiry tokens before publishing. Existing Facebook Page connections retain
+their Facebook Graph API routing so this change does not invalidate saved tokens.
+
+Configure these **Instagram product** credentials on the API service:
+
+- `DRIPCUT_INSTAGRAM_APP_ID`
+- `DRIPCUT_INSTAGRAM_APP_SECRET`
+
+Find them in Meta App Dashboard → Instagram → API setup with Instagram login →
+Set up Instagram business login → Business login settings. Register this exact URI:
+`https://dripcut.onrender.com/api/social/instagram/callback`.
+Do not copy the parent Facebook app credentials into these fields. A Creator or
+Business Instagram account is still required; a Facebook Page is not.
+
+Render's environment names were inspected during this change. Only the legacy
+`DRIPCUT_META_APP_ID` and `DRIPCUT_META_APP_SECRET` were present. New Instagram
+connections show setup required until the Instagram-specific credentials are saved.
+Meta dashboard sign-in is needed to finish that configuration and test real consent.
+
+Official protocol reference:
+https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/business-login
