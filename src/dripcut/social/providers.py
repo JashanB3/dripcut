@@ -396,7 +396,12 @@ class InstagramProvider:
             },
         )
         if response.is_error:
-            raise _provider_error("Instagram", response)
+            error = _provider_error("Instagram", response)
+            raise SocialProviderError(
+                "Instagram could not exchange the sign-in code.",
+                hint=error.hint,
+                code="INSTAGRAM_TOKEN_EXCHANGE_FAILED",
+            )
         payload = response.json()
         if "data" in payload:
             rows = payload["data"]
@@ -421,7 +426,12 @@ class InstagramProvider:
             },
         )
         if long_lived.is_error:
-            raise _provider_error("Instagram", long_lived)
+            error = _provider_error("Instagram", long_lived)
+            raise SocialProviderError(
+                "Instagram rejected the long-lived token exchange.",
+                hint=error.hint,
+                code="INSTAGRAM_LONG_LIVED_TOKEN_FAILED",
+            )
         token_payload = long_lived.json()
         token = str(token_payload["access_token"])
         profile = self.client.get(
@@ -429,7 +439,12 @@ class InstagramProvider:
             params={"fields": "user_id,username", "access_token": token},
         )
         if profile.is_error:
-            raise _provider_error("Instagram", profile)
+            error = _provider_error("Instagram", profile)
+            raise SocialProviderError(
+                "Instagram could not load the connected professional account.",
+                hint=error.hint,
+                code="INSTAGRAM_PROFILE_LOOKUP_FAILED",
+            )
         instagram = profile.json()
         if str(instagram.get("user_id") or "") != user_id:
             raise SocialProviderError("Instagram could not verify the connected account. Connect again.")

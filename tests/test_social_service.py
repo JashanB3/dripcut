@@ -697,8 +697,9 @@ def test_instagram_rejects_failed_long_lived_exchange():
         return httpx.Response(200, json={"access_token": "short", "user_id": "ig"})
 
     provider = InstagramProvider("app", "secret", client=httpx.Client(transport=httpx.MockTransport(handler)))
-    with pytest.raises(SocialProviderError):
+    with pytest.raises(SocialProviderError, match="long-lived token exchange") as failure:
         provider.exchange_code(code="code", redirect_uri="https://example.test/callback")
+    assert failure.value.code == "INSTAGRAM_LONG_LIVED_TOKEN_FAILED"
 
 
 def test_oauth_reconnect_preserves_connection_identity(paths):

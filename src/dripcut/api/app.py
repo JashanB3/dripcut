@@ -287,6 +287,18 @@ def _social_oauth_error_code(platform: str, error: object) -> str:
     """Reduce provider details to a safe, actionable browser error code."""
     detail = str(error).lower()
     if platform == "instagram":
+        if any(
+            word in detail
+            for word in (
+                "token exchange",
+                "exchange the sign-in code",
+                "long-lived token",
+                "client secret",
+                "redirect uri",
+                "invalid platform app",
+            )
+        ):
+            return "instagram-configuration"
         if any(word in detail for word in ("business", "creator", "professional", "eligible")):
             return "instagram-account"
         if any(word in detail for word in ("permission", "publishing", "scope", "access")):
@@ -1744,6 +1756,12 @@ def create_app(
             )
         except DripCutError as exc:
             error_code = _social_oauth_error_code(platform, exc)
+            logger.warning(
+                "social_oauth_failed platform=%s error_code=%s provider_code=%s",
+                platform,
+                error_code,
+                exc.code,
+            )
             return RedirectResponse(
                 _frontend_url(
                     f"/settings?social={platform}-failed&social_error={error_code}"

@@ -83,6 +83,7 @@ def test_social_oauth_errors_are_reduced_to_safe_actionable_codes() -> None:
 
     assert _social_oauth_error_code("instagram", "Only professional accounts are eligible") == "instagram-account"
     assert _social_oauth_error_code("instagram", "Publishing permission was declined") == "instagram-permissions"
+    assert _social_oauth_error_code("instagram", "Instagram rejected the long-lived token exchange") == "instagram-configuration"
     assert _social_oauth_error_code("youtube", "No YouTube channel was found") == "youtube-channel"
     assert _social_oauth_error_code("instagram", "provider response was malformed") == "instagram"
 
