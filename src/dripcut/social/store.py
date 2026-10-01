@@ -32,6 +32,10 @@ class SocialStore(Protocol):
         self, workspace_id: str, platform: PlatformName, *, access_token: str = ""
     ) -> None: ...
 
+    def delete_external_account(
+        self, platform: PlatformName, external_account_id: str
+    ) -> int: ...
+
     def save_schedule(self, schedule: SocialSchedule, *, access_token: str = "") -> None: ...
 
     def latest_schedule(
@@ -87,6 +91,23 @@ class LocalSocialStore:
             data = self._read()
             data["accounts"].pop(f"{workspace_id}:{platform}", None)
             self._write(data)
+
+    def delete_external_account(
+        self, platform: PlatformName, external_account_id: str
+    ) -> int:
+        with self._lock:
+            data = self._read()
+            matches = [
+                key
+                for key, row in data["accounts"].items()
+                if row.get("platform") == platform
+                and str(row.get("external_account_id") or "") == external_account_id
+            ]
+            for key in matches:
+                data["accounts"].pop(key, None)
+            if matches:
+                self._write(data)
+            return len(matches)
 
     def save_schedule(self, schedule: SocialSchedule, *, access_token: str = "") -> None:
         del access_token
@@ -275,6 +296,27 @@ class SupabaseSocialStore:
             ),
             access_token=access_token,
         )
+
+    def delete_external_account(
+        self, platform: PlatformName, external_account_id: str
+    ) -> int:
+        if not self.service_key:
+            raise RuntimeError(
+                "SUPABASE_SERVICE_ROLE_KEY is required for provider deauthorization."
+            )
+        rows = self._request(
+            "DELETE",
+            "/rest/v1/social_connections?"
+            + urlencode(
+                {
+                    "platform": f"eq.{platform}",
+                    "external_account_id": f"eq.{external_account_id}",
+                }
+            ),
+            access_token=self.service_key,
+            prefer="return=representation",
+        )
+        return len(rows) if isinstance(rows, list) else 0
 
     def save_schedule(self, schedule: SocialSchedule, *, access_token: str = "") -> None:
         payload = []

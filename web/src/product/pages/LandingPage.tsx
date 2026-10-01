@@ -19,7 +19,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { navigatePath } from "../../auth/authState";
 
-type MarketingPageKind = "home" | "pricing" | "about";
+type MarketingPageKind = "home" | "pricing" | "about" | "privacy" | "terms" | "data-deletion";
 
 const MRBEAST_VIDEO_URL = "https://www.youtube.com/watch?v=aKq8bkY5eTU";
 const MRBEAST_THUMBNAIL = "https://i.ytimg.com/vi/aKq8bkY5eTU/maxresdefault.jpg";
@@ -52,6 +52,18 @@ export function AboutPage({ signedIn }: { signedIn: boolean }) {
   return <MarketingPage page="about" signedIn={signedIn} />;
 }
 
+export function PrivacyPage({ signedIn }: { signedIn: boolean }) {
+  return <MarketingPage page="privacy" signedIn={signedIn} />;
+}
+
+export function TermsPage({ signedIn }: { signedIn: boolean }) {
+  return <MarketingPage page="terms" signedIn={signedIn} />;
+}
+
+export function DataDeletionPage({ signedIn }: { signedIn: boolean }) {
+  return <MarketingPage page="data-deletion" signedIn={signedIn} />;
+}
+
 function MarketingPage({ page, signedIn }: { page: MarketingPageKind; signedIn: boolean }) {
   useMarketingMeta(page);
 
@@ -61,6 +73,9 @@ function MarketingPage({ page, signedIn }: { page: MarketingPageKind; signedIn: 
       {page === "home" && <HomeContent signedIn={signedIn} />}
       {page === "pricing" && <PricingContent signedIn={signedIn} />}
       {page === "about" && <AboutContent signedIn={signedIn} />}
+      {page === "privacy" && <PrivacyContent />}
+      {page === "terms" && <TermsContent />}
+      {page === "data-deletion" && <DataDeletionContent />}
       <MarketingFooter />
     </div>
   );
@@ -271,9 +286,41 @@ function AboutContent({ signedIn }: { signedIn: boolean }) {
   </main>;
 }
 
+function PrivacyContent() {
+  return <main className="marketing-inner-page legal-page">
+    <header><span className="landing-section__eyebrow">Privacy</span><h1>Privacy at DripCut</h1><p>Last updated October 2, 2026</p></header>
+    <section><h2>What DripCut uses</h2><p>DripCut uses your account details to provide your workspace. When you connect Instagram or YouTube, we store the account identifier, display name, granted permissions, and encrypted access credentials needed to publish the clips you approve. We also process videos, captions, schedules, and basic service diagnostics that you choose to create.</p></section>
+    <section><h2>How the information is used</h2><p>We use this information to import and process videos, keep your projects available, connect your publishing accounts, publish or schedule approved clips, secure the service, and diagnose failures.</p></section>
+    <section><h2>Service providers</h2><p>DripCut shares information only as needed with infrastructure, authentication, storage, AI, and publishing providers that operate the service. Publishing to Instagram or YouTube sends the approved media and metadata to the platform you selected.</p></section>
+    <section><h2>Your controls</h2><p>You can disconnect Instagram or YouTube from Settings at any time; this removes DripCut's stored credentials for that connection. You can also remove projects in the product. To request deletion of your DripCut account data, email <a href="mailto:hello@dripcut.app?subject=DripCut%20data%20deletion">hello@dripcut.app</a>.</p></section>
+    <section><h2>Security and retention</h2><p>Publishing credentials are encrypted server-side. DripCut retains workspace data while your account is active and for only as long as needed to provide the service, resolve security issues, and meet legal obligations.</p></section>
+    <section><h2>Contact</h2><p>Questions about privacy can be sent to <a href="mailto:hello@dripcut.app?subject=DripCut%20privacy">hello@dripcut.app</a>.</p></section>
+  </main>;
+}
+
+function TermsContent() {
+  return <main className="marketing-inner-page legal-page">
+    <header><span className="landing-section__eyebrow">Terms</span><h1>DripCut terms of use</h1><p>Last updated October 2, 2026</p></header>
+    <section><h2>Your content</h2><p>You keep ownership of your content. You may upload, transform, and publish only content you own or have permission to use. You give DripCut the limited permission needed to process, store, and send that content according to your instructions.</p></section>
+    <section><h2>Publishing accounts</h2><p>You control which Instagram and YouTube accounts you connect and which clips are published. Platform rules also apply. You can disconnect a publishing account at any time from Settings.</p></section>
+    <section><h2>Acceptable use</h2><p>Do not use DripCut to violate rights, impersonate others, distribute unlawful material, bypass platform safeguards, or interfere with the service.</p></section>
+    <section><h2>Early access</h2><p>DripCut is currently offered in early access. Features may change and occasional interruptions may occur. Review clips, captions, account selection, and publishing times before confirming a schedule.</p></section>
+    <section><h2>Contact</h2><p>Questions about these terms can be sent to <a href="mailto:hello@dripcut.app?subject=DripCut%20terms">hello@dripcut.app</a>.</p></section>
+  </main>;
+}
+
+function DataDeletionContent() {
+  const confirmationCode = new URLSearchParams(window.location.search).get("confirmation_code");
+  return <main className="marketing-inner-page legal-page">
+    <header><span className="landing-section__eyebrow">Instagram data deletion</span><h1>{confirmationCode ? "Your Instagram connection has been removed." : "Remove your Instagram data."}</h1><p>{confirmationCode ? "DripCut no longer stores the publishing credential associated with this Instagram connection." : "Disconnect Instagram from DripCut Settings to remove the stored publishing credential immediately."}</p></header>
+    {confirmationCode && <section><h2>Confirmation code</h2><code>{confirmationCode}</code></section>}
+    <section><h2>Delete more DripCut data</h2><p>Removing Instagram access does not delete unrelated projects or your DripCut account. You can delete projects in DripCut or email <a href="mailto:hello@dripcut.app?subject=DripCut%20data%20deletion">hello@dripcut.app</a> to request account-data deletion.</p></section>
+  </main>;
+}
+
 function MarketingFooter() {
   const go = (event: React.MouseEvent<HTMLAnchorElement>, path: string) => { event.preventDefault(); navigatePath(path); };
-  return <footer className="landing-footer"><a className="landing-brand" href="/" onClick={(event) => go(event, "/")}><span>dc</span><strong>DripCut</strong></a><p>Paste the link. Skip the busywork.</p><nav><a href="/" onClick={(event) => go(event, "/")}>Product</a><a href="/pricing" onClick={(event) => go(event, "/pricing")}>Pricing</a><a href="/about" onClick={(event) => go(event, "/about")}>About</a></nav><small>© {new Date().getFullYear()} DripCut</small></footer>;
+  return <footer className="landing-footer"><a className="landing-brand" href="/" onClick={(event) => go(event, "/")}><span>dc</span><strong>DripCut</strong></a><p>Paste the link. Skip the busywork.</p><nav><a href="/" onClick={(event) => go(event, "/")}>Product</a><a href="/pricing" onClick={(event) => go(event, "/pricing")}>Pricing</a><a href="/about" onClick={(event) => go(event, "/about")}>About</a><a href="/privacy" onClick={(event) => go(event, "/privacy")}>Privacy</a><a href="/terms" onClick={(event) => go(event, "/terms")}>Terms</a></nav><small>© {new Date().getFullYear()} DripCut</small></footer>;
 }
 
 function SectionHeading({ eyebrow, title, body }: { eyebrow: string; title: string; body: string }) {
@@ -297,6 +344,21 @@ function useMarketingMeta(page: MarketingPageKind) {
         title: "About DripCut — Less Video Busywork",
         description: "Learn why DripCut is building a faster path from long videos to scheduled short-form content.",
         path: "/about",
+      },
+      privacy: {
+        title: "DripCut Privacy Policy",
+        description: "How DripCut handles account, video, and connected publishing data.",
+        path: "/privacy",
+      },
+      terms: {
+        title: "DripCut Terms of Use",
+        description: "The terms for using DripCut to create and publish video clips.",
+        path: "/terms",
+      },
+      "data-deletion": {
+        title: "Instagram Data Deletion — DripCut",
+        description: "Confirmation and next steps for an Instagram data-deletion request.",
+        path: "/data-deletion",
       },
     }[page];
     const canonicalUrl = `https://dripcut.onrender.com${metadata.path}`;

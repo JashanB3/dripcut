@@ -240,6 +240,14 @@ class SocialScheduleService:
             access_token=principal.access_token,
         )
 
+    def disconnect_external_account(
+        self, platform: PlatformName, external_account_id: str
+    ) -> int:
+        """Remove provider credentials after a verified provider callback."""
+        if not external_account_id:
+            return 0
+        return self.store.delete_external_account(platform, external_account_id)
+
     def connections(self, principal: Principal | None = None) -> list[SocialConnection]:
         workspace_id, access_token = _identity(principal)
         return [

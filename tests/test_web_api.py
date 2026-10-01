@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import io
+import json
 import time
 import zipfile
 from pathlib import Path
@@ -29,6 +33,7 @@ from dripcut.services.youtube_service import (
     YouTubeImportResult,
     YouTubeMetadata,
 )
+from dripcut.social.models import SocialAccount, SocialCredentials
 
 
 def _wait_for_job(client: TestClient, job_id: str, timeout: float = 20) -> dict[str, object]:
@@ -41,6 +46,19 @@ def _wait_for_job(client: TestClient, job_id: str, timeout: float = 20) -> dict[
             return payload
         time.sleep(0.1)
     raise AssertionError("render job did not finish in time")
+
+
+def _meta_signed_request(user_id: str, secret: str) -> str:
+    payload = base64.urlsafe_b64encode(
+        json.dumps(
+            {"algorithm": "HMAC-SHA256", "user_id": user_id},
+            separators=(",", ":"),
+        ).encode()
+    ).decode().rstrip("=")
+    signature = base64.urlsafe_b64encode(
+        hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest()
+    ).decode().rstrip("=")
+    return f"{signature}.{payload}"
 
 
 def test_health_reports_media_dependencies(container) -> None:
@@ -86,6 +104,68 @@ def test_social_oauth_errors_are_reduced_to_safe_actionable_codes() -> None:
     assert _social_oauth_error_code("instagram", "Instagram rejected the long-lived token exchange") == "instagram-configuration"
     assert _social_oauth_error_code("youtube", "No YouTube channel was found") == "youtube-channel"
     assert _social_oauth_error_code("instagram", "provider response was malformed") == "instagram"
+
+
+def test_instagram_deauthorize_callback_removes_matching_connection(container, monkeypatch) -> None:
+    secret = "instagram-secret"
+    monkeypatch.setenv("DRIPCUT_INSTAGRAM_APP_SECRET", secret)
+    service = build_service(container)
+    app = create_app(service, require_auth=False)
+    account = SocialAccount(
+        workspace_id="workspace-1",
+        owner_id="user-1",
+        platform="instagram",
+        external_account_id="ig-user-1",
+        display_name="creator",
+        encrypted_credentials=service.container.social.cipher.encrypt(
+            SocialCredentials(access_token="token").to_dict()
+        ),
+    )
+    service.container.social.store.save_account(account)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/social/instagram/deauthorize",
+            data={"signed_request": _meta_signed_request("ig-user-1", secret)},
+        )
+
+    assert response.status_code == 204
+    assert service.container.social.store.account("workspace-1", "instagram") is None
+
+
+def test_instagram_data_deletion_returns_status_url(container, monkeypatch) -> None:
+    secret = "instagram-secret"
+    monkeypatch.setenv("DRIPCUT_INSTAGRAM_APP_SECRET", secret)
+    monkeypatch.setenv("DRIPCUT_FRONTEND_URL", "https://dripcut.example")
+    service = build_service(container)
+    app = create_app(service, require_auth=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/social/instagram/data-deletion",
+            data={"signed_request": _meta_signed_request("ig-user-1", secret)},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["confirmation_code"]
+    assert payload["url"] == (
+        "https://dripcut.example/data-deletion?confirmation_code="
+        f"{payload['confirmation_code']}"
+    )
+
+
+def test_instagram_server_callbacks_reject_invalid_signatures(container, monkeypatch) -> None:
+    monkeypatch.setenv("DRIPCUT_INSTAGRAM_APP_SECRET", "instagram-secret")
+    app = create_app(build_service(container), require_auth=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/social/instagram/deauthorize",
+            data={"signed_request": _meta_signed_request("ig-user-1", "wrong-secret")},
+        )
+
+    assert response.status_code == 400
 
 
 def test_project_card_reconciles_an_interrupted_render(container) -> None:

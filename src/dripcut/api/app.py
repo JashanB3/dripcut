@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
+import json
 import logging
 import os
 import threading
@@ -322,6 +325,41 @@ def _social_callback_url(platform: str) -> str:
         or "http://127.0.0.1:8000"
     ).rstrip("/")
     return f"{root}/api/social/{platform}/callback"
+
+
+def _decode_meta_signed_request(value: str, app_secret: str) -> dict[str, object]:
+    """Verify and decode Meta's server-to-server signed_request payload."""
+    if not value or not app_secret:
+        raise ValueError("Missing signed request configuration.")
+    try:
+        encoded_signature, encoded_payload = value.split(".", 1)
+        supplied = base64.urlsafe_b64decode(
+            encoded_signature + "=" * (-len(encoded_signature) % 4)
+        )
+        expected = hmac.new(
+            app_secret.encode("utf-8"),
+            encoded_payload.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        if not hmac.compare_digest(supplied, expected):
+            raise ValueError("Invalid signed request signature.")
+        decoded = base64.urlsafe_b64decode(
+            encoded_payload + "=" * (-len(encoded_payload) % 4)
+        )
+        payload = json.loads(decoded)
+    except (UnicodeError, ValueError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("Invalid signed request.") from error
+    if not isinstance(payload, dict) or str(payload.get("algorithm") or "").upper() != "HMAC-SHA256":
+        raise ValueError("Unsupported signed request algorithm.")
+    return payload
+
+
+def _meta_deletion_confirmation(external_account_id: str, app_secret: str) -> str:
+    return hmac.new(
+        app_secret.encode("utf-8"),
+        f"instagram-data-deletion:{external_account_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()[:24]
 
 
 def _set_session_cookies(response: Response, result: AuthResult) -> None:
@@ -1771,6 +1809,44 @@ def create_app(
         return RedirectResponse(
             _frontend_url(f"/settings?social={platform}-connected"),
             status_code=303,
+        )
+
+    async def verified_instagram_callback(request: Request) -> str:
+        form = await request.form()
+        signed_request = str(form.get("signed_request") or "")
+        try:
+            payload = _decode_meta_signed_request(
+                signed_request,
+                os.environ.get("DRIPCUT_INSTAGRAM_APP_SECRET", "").strip(),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Invalid Instagram callback.") from error
+        external_account_id = str(payload.get("user_id") or "").strip()
+        if not external_account_id:
+            raise HTTPException(status_code=400, detail="Instagram account id is missing.")
+        return external_account_id
+
+    @app.post("/api/social/instagram/deauthorize", response_model=None)
+    async def instagram_deauthorize(request: Request) -> Response:
+        external_account_id = await verified_instagram_callback(request)
+        removed = social.disconnect_external_account("instagram", external_account_id)
+        logger.info("instagram_deauthorized removed_connections=%s", removed)
+        return Response(status_code=204)
+
+    @app.post("/api/social/instagram/data-deletion", response_model=None)
+    async def instagram_data_deletion(request: Request) -> JSONResponse:
+        external_account_id = await verified_instagram_callback(request)
+        removed = social.disconnect_external_account("instagram", external_account_id)
+        secret = os.environ.get("DRIPCUT_INSTAGRAM_APP_SECRET", "").strip()
+        confirmation_code = _meta_deletion_confirmation(external_account_id, secret)
+        logger.info("instagram_data_deleted removed_connections=%s", removed)
+        return JSONResponse(
+            {
+                "url": _frontend_url(
+                    f"/data-deletion?confirmation_code={confirmation_code}"
+                ),
+                "confirmation_code": confirmation_code,
+            }
         )
 
     @app.delete(

@@ -173,6 +173,19 @@ https://api.example.com/api/social/youtube/callback
 https://api.example.com/api/social/instagram/callback
 ```
 
+For public Instagram customer access, request Meta Advanced Access only for
+`instagram_business_basic` and `instagram_business_content_publish`. Configure the Instagram
+business-login deauthorization and data-deletion callbacks on the same browser-facing origin:
+
+```text
+https://app.example.com/api/social/instagram/deauthorize
+https://app.example.com/api/social/instagram/data-deletion
+```
+
+The public privacy policy, terms, and deletion-status pages are `/privacy`, `/terms`, and
+`/data-deletion`. See [`docs/META_INSTAGRAM_REVIEW.md`](docs/META_INSTAGRAM_REVIEW.md) for the
+review description and recording checklist.
+
 Credentials and refresh tokens are encrypted server-side. Publishing runs through the durable
 scheduler and records `scheduled`, `uploading`, `published`, and `failed` states.
 

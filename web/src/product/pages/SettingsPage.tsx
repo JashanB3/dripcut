@@ -14,12 +14,12 @@ export function SettingsPage() {
   const socialResult = params.get("social");
   const socialError = params.get("social_error");
   const instagramFailure = socialError === "instagram-account"
-    ? "Instagram rejected this account even though it may already be professional. While DripCut's Meta app is in testing, add this exact Instagram account as a tester in Meta for Developers, accept the invitation in Instagram, then reconnect."
+    ? "Instagram could not use this account. Switch it to a free Creator or Business account in Instagram, then reconnect."
     : socialError === "instagram-configuration"
-      ? "Instagram accepted the sign-in, but DripCut could not finish the secure token setup. Add this Instagram account under Meta's API setup, then verify the Instagram app secret and callback URL."
+      ? "Instagram accepted the sign-in but could not finish connecting. Try again. If it continues, contact DripCut support."
     : socialError === "instagram-permissions"
       ? "Instagram did not grant publishing access. Reconnect and allow both profile and content publishing permissions."
-      : "Instagram could not finish the connection. This account is professional; check Meta testing access and reconnect."
+      : "Instagram could not finish the connection. Try again or contact DripCut support if it continues."
 
   const refresh = async () => {
     const connections = await fetchSocialConnections();

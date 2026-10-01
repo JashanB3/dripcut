@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { AuthPage } from "./auth/AuthPage";
 import { navigatePath, useAuth } from "./auth/authState";
 import { CreateModal } from "./product/components/CreateModal";
-import { AboutPage, LandingPage, PricingPage } from "./product/pages/LandingPage";
+import { AboutPage, DataDeletionPage, LandingPage, PrivacyPage, PricingPage, TermsPage } from "./product/pages/LandingPage";
 import { ProductShell, type UtilityPanel } from "./product/components/ProductShell";
 import type { ProductRoute } from "./product/models";
 import { AIEditorPage } from "./product/pages/AIEditorPage";
@@ -40,7 +40,7 @@ export function App() {
   useEffect(() => {
     if (auth.loading) return;
     const isAuthPath = ["/login", "/signup", "/forgot-password", "/reset-password", "/auth/callback", "/logout"].includes(pathname);
-    const isPublicPath = ["/", "/pricing", "/about"].includes(pathname);
+    const isPublicPath = ["/", "/pricing", "/about", "/privacy", "/terms", "/data-deletion"].includes(pathname);
     if (!auth.session && !isPublicPath && !isAuthPath) navigatePath("/login", true);
     if (auth.session && ["/login", "/signup"].includes(pathname)) navigatePath("/home", true);
   }, [auth.loading, auth.session, pathname]);
@@ -71,6 +71,9 @@ export function App() {
   if (pathname === "/") return <LandingPage signedIn={Boolean(auth.session)} />;
   if (pathname === "/pricing") return <PricingPage signedIn={Boolean(auth.session)} />;
   if (pathname === "/about") return <AboutPage signedIn={Boolean(auth.session)} />;
+  if (pathname === "/privacy") return <PrivacyPage signedIn={Boolean(auth.session)} />;
+  if (pathname === "/terms") return <TermsPage signedIn={Boolean(auth.session)} />;
+  if (pathname === "/data-deletion") return <DataDeletionPage signedIn={Boolean(auth.session)} />;
   if (!auth.session?.user) return <div className="app-loading"><span className="auth-loader" />Opening login...</div>;
 
   return (
