@@ -283,6 +283,19 @@ def _frontend_url(path: str = "") -> str:
     return f"{root}{path}"
 
 
+def _social_oauth_error_code(platform: str, error: object) -> str:
+    """Reduce provider details to a safe, actionable browser error code."""
+    detail = str(error).lower()
+    if platform == "instagram":
+        if any(word in detail for word in ("business", "creator", "professional", "eligible")):
+            return "instagram-account"
+        if any(word in detail for word in ("permission", "publishing", "scope", "access")):
+            return "instagram-permissions"
+    if platform == "youtube" and "channel" in detail:
+        return "youtube-channel"
+    return platform
+
+
 def _social_callback_url(platform: str) -> str:
     # OAuth providers must redirect back to the browser-facing DripCut origin.
     # On Render, /api/* is proxied from the frontend service to the API service,
@@ -1703,6 +1716,7 @@ def create_app(
         code: str = Query(default="", max_length=4096),
         state: str = Query(default="", max_length=4096),
         error: str = Query(default="", max_length=200),
+        error_description: str = Query(default="", max_length=500),
     ) -> RedirectResponse:
         # OAuth callbacks are normally reached in the same browser session that
         # started the connection. A pasted callback URL has neither that session
@@ -1713,8 +1727,11 @@ def create_app(
         except AuthProviderError:
             return RedirectResponse(_frontend_url("/login"), status_code=303)
         if error:
+            error_code = _social_oauth_error_code(platform, error_description or error)
             return RedirectResponse(
-                _frontend_url(f"/settings?social={platform}-denied"),
+                _frontend_url(
+                    f"/settings?social={platform}-denied&social_error={error_code}"
+                ),
                 status_code=303,
             )
         try:
@@ -1725,9 +1742,12 @@ def create_app(
                 state=state,
                 redirect_uri=_social_callback_url(platform),
             )
-        except DripCutError:
+        except DripCutError as exc:
+            error_code = _social_oauth_error_code(platform, exc)
             return RedirectResponse(
-                _frontend_url(f"/settings?social={platform}-failed"),
+                _frontend_url(
+                    f"/settings?social={platform}-failed&social_error={error_code}"
+                ),
                 status_code=303,
             )
         return RedirectResponse(

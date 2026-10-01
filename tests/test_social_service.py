@@ -769,7 +769,8 @@ def test_instagram_authorizes_directly_without_facebook():
     assert url.path == "/oauth/authorize"
     query = parse_qs(url.query)
     assert query["enable_fb_login"] == ["false"]
-    assert query["force_reauth"] == ["true"]
+    assert "force_reauth" not in query
+    assert "force_authentication" not in query
     assert query["state"] == ["state"]
     assert set(query["scope"][0].split(",")) == {"instagram_business_basic", "instagram_business_content_publish"}
 

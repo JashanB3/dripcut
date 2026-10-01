@@ -379,7 +379,6 @@ class InstagramProvider:
                 "response_type": "code",
                 "scope": ",".join(self.scopes),
                 "enable_fb_login": "false",
-                "force_reauth": "true",
             }
         )
         return f"https://www.instagram.com/oauth/authorize?{query}"

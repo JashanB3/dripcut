@@ -13,6 +13,11 @@ export function SettingsPage() {
   const params = new URLSearchParams(window.location.search);
   const socialResult = params.get("social");
   const socialError = params.get("social_error");
+  const instagramFailure = socialError === "instagram-account"
+    ? "Instagram rejected this account even though it may already be professional. While DripCut's Meta app is in testing, add this exact Instagram account as a tester in Meta for Developers, accept the invitation in Instagram, then reconnect."
+    : socialError === "instagram-permissions"
+      ? "Instagram did not grant publishing access. Reconnect and allow both profile and content publishing permissions."
+      : "Instagram could not be connected. Sign in with an Instagram Creator or Business account and allow publishing access, then try again.";
 
   const refresh = async () => {
     const connections = await fetchSocialConnections();
@@ -47,8 +52,8 @@ export function SettingsPage() {
     {socialResult === "youtube-denied" && <div className="social-notice">YouTube connection was cancelled. Nothing changed.</div>}
     {(socialResult === "youtube-failed" || socialError === "youtube") && <CustomerError error={null} fallback="YouTube could not be connected. Check that this Google account owns a YouTube channel, then try again." />}
     {socialResult === "instagram-connected" && <div className="social-notice"><CheckCircle2 size={16} /> Instagram connected successfully.</div>}
-    {socialResult === "instagram-denied" && <div className="social-notice">Instagram connection was cancelled. Nothing changed.</div>}
-    {(socialResult === "instagram-failed" || socialError === "instagram") && <CustomerError error={null} fallback="Instagram could not be connected. Sign in with an Instagram Creator or Business account and allow publishing access, then try again." />}
+    {socialResult === "instagram-denied" && !socialError?.startsWith("instagram-") && <div className="social-notice">Instagram connection was cancelled. Nothing changed.</div>}
+    {(socialResult === "instagram-failed" || socialError?.startsWith("instagram")) && <CustomerError error={null} fallback={instagramFailure} />}
     <section className="connection-cards">
       {!connections.length && !error && <div className="social-loading" role="status">Loading publishing accounts…</div>}
       {connections.map((connection) => <article className="social-connection-card" key={connection.platform} data-connected={connection.connected}>
@@ -57,7 +62,7 @@ export function SettingsPage() {
          <button aria-label={`${connection.connected ? "Disconnect" : "Connect"} ${connection.label}`} disabled={(!connection.configured && !connection.connected) || busy} onClick={() => void changeConnection(connection.platform)}>{busy ? "Working…" : connection.connected ? "Disconnect" : connection.configured ? `Connect ${connection.platform === "youtube" ? "YouTube" : "Instagram"}` : "Admin setup required"}</button>
       </article>)}
     </section>
-    <p className="settings-social-help"><Instagram size={16} /> Sign in directly with your Instagram Creator or Business account. No Facebook Page is required. After connecting it here, select Instagram Reels in Schedule and it will publish in the same time slot as YouTube when both are selected.</p>
+    <p className="settings-social-help"><Instagram size={16} /> Sign in directly with your Instagram Creator or Business account. DripCut will reuse your signed-in Instagram session when available. No Facebook Page is required. After connecting it here, select Instagram Reels in Schedule.</p>
     <section className="settings-cards">
       <article><ServerCog size={22} /><div><strong>Video processing</strong><span>Standard clipping works without AI</span><small>Upload a video or paste a supported YouTube link to begin.</small></div></article>
       <article><CheckCircle2 size={22} /><div><strong>Private project persistence</strong><span>Your projects belong to your workspace</span><small>Open Projects to continue working or download completed clips.</small></div></article>

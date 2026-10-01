@@ -78,6 +78,15 @@ def test_social_oauth_callback_prefers_frontend_origin(monkeypatch) -> None:
     )
 
 
+def test_social_oauth_errors_are_reduced_to_safe_actionable_codes() -> None:
+    from dripcut.api.app import _social_oauth_error_code
+
+    assert _social_oauth_error_code("instagram", "Only professional accounts are eligible") == "instagram-account"
+    assert _social_oauth_error_code("instagram", "Publishing permission was declined") == "instagram-permissions"
+    assert _social_oauth_error_code("youtube", "No YouTube channel was found") == "youtube-channel"
+    assert _social_oauth_error_code("instagram", "provider response was malformed") == "instagram"
+
+
 def test_project_card_reconciles_an_interrupted_render(container) -> None:
     service = build_service(container)
     project = container.projects.create("Interrupted render")
